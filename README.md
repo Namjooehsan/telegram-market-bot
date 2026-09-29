@@ -1,3 +1,3 @@
-# telegram-market-bot
+ # telegram-market-bot
 برای گذاشتن پست در گروه تلگرام
 اجازه به چت جی پی تی برای دسترسی کامل 
