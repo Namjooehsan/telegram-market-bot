@@ -159,6 +159,8 @@ def telegram_webhook():
     if not TELEGRAM_WEBHOOK_SECRET or not hmac.compare_digest(supplied, TELEGRAM_WEBHOOK_SECRET):
         return jsonify({"error": "unauthorized"}), 401
     update = request.get_json(silent=True) or {}
+    if update.get("callback_query"):
+        return telegram_callback()
     message = update.get("message") or {}
     user = message.get("from") or {}
     user_id = user.get("id")
