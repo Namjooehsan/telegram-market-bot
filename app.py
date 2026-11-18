@@ -405,7 +405,8 @@ def stars_product(product_code):
             "title": "ایده کسب‌وکار اختصاصی با هوش مصنوعی",
             "description": "یک ایده کاربردی همراه با مشتری هدف، هزینه شروع و روش اعتبارسنجی",
             "price": STARS_IDEA_PRICE,
-        },        "fun_pack": {
+        },
+        "fun_pack": {
             "title": "بسته سرگرمی و معمای ویژه",
             "description": "۱۰ سؤال دانستنی و معمای منطقی همراه با پاسخ",
             "price": STARS_FUNPACK_PRICE,
