@@ -37,6 +37,7 @@ WEBHOOK_CONFIGURED = False
 ADMIN_IDS = {x.strip() for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if x.strip()}
 BINANCE_BASE = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_AUTH_FAILED = False
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 TRACKED_SYMBOLS = [x.strip().upper() for x in os.getenv(
@@ -129,8 +130,9 @@ def market_snapshot(symbol="BTCUSDT"):
 
 
 def openai_text(prompt, system_prompt, max_output_tokens=650):
-    """Call the OpenAI Responses API; skip cleanly until a private key is configured."""
-    if not OPENAI_API_KEY:
+    """Call the OpenAI Responses API, disabling repeated calls after auth failures."""
+    global OPENAI_AUTH_FAILED
+    if not OPENAI_API_KEY or OPENAI_AUTH_FAILED:
         return None
     if not consume_ai_quota():
         log.warning("Daily AI request limit reached; skipping this AI response")
@@ -163,6 +165,18 @@ def openai_text(prompt, system_prompt, max_output_tokens=650):
                 if part.get("type") == "output_text" and part.get("text"):
                     chunks.append(part["text"])
         return "\n".join(chunks).strip() or None
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else None
+        if status_code in (401, 403):
+            OPENAI_AUTH_FAILED = True
+            log.error(
+                "OpenAI authentication/permission failed (HTTP %s); AI calls are paused "
+                "until OPENAI_API_KEY is corrected and the service restarts.",
+                status_code
+            )
+        else:
+            log.exception("OpenAI analysis request failed")
+        return None
     except Exception:
         log.exception("OpenAI analysis request failed")
         return None
