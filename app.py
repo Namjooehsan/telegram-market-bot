@@ -1,8 +1,11 @@
 import os
 import hmac
 import logging
+import json
+import sqlite3
+import uuid
 from datetime import datetime, timezone
-from threading import Lock
+from pathlib import Path
 
 import requests
 from flask import Flask, jsonify, request
@@ -17,8 +20,7 @@ log = logging.getLogger("market-bot")
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 limiter = Limiter(get_remote_address, app=app, default_limits=["120 per hour"])
-draft_lock = Lock()
-DRAFTS = {}
+DRAFT_DB_PATH = os.getenv("DRAFT_DB_PATH", "./data/drafts.sqlite3")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -119,11 +121,47 @@ def is_admin(user_id):
     return str(user_id) in ADMIN_IDS
 
 
+def draft_db():
+    db_path = Path(DRAFT_DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(db_path), timeout=10)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS drafts (
+            draft_id TEXT PRIMARY KEY,
+            body TEXT NOT NULL,
+            data_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+        )
+    """)
+    return connection
+
+
+def get_draft(draft_id):
+    with draft_db() as connection:
+        row = connection.execute(
+            "SELECT body, data_json, created_at, status FROM drafts WHERE draft_id = ?",
+            (draft_id,)
+        ).fetchone()
+    if not row:
+        return None
+    return {"text": row[0], "data": json.loads(row[1]), "created": row[2], "status": row[3]}
+
+
+def delete_draft(draft_id):
+    with draft_db() as connection:
+        connection.execute("DELETE FROM drafts WHERE draft_id = ?", (draft_id,))
+
+
 def create_draft():
     body, data = make_report()
-    draft_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    with draft_lock:
-        DRAFTS[draft_id] = {"text": body, "data": data, "created": datetime.now(timezone.utc).isoformat()}
+    draft_id = uuid.uuid4().hex[:16]
+    created_at = datetime.now(timezone.utc).isoformat()
+    with draft_db() as connection:
+        connection.execute(
+            "INSERT INTO drafts (draft_id, body, data_json, created_at, status) VALUES (?, ?, ?, ?, 'pending')",
+            (draft_id, body, json.dumps(data, ensure_ascii=False), created_at)
+        )
     return draft_id, body
 
 
@@ -212,19 +250,16 @@ def telegram_callback():
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "دسترسی غیرمجاز"})
             return jsonify({"ok": True})
         action, _, draft_id = data.partition(":")
-        with draft_lock:
-            draft = DRAFTS.get(draft_id)
+        draft = get_draft(draft_id)
         if not draft:
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "پیش‌نویس منقضی یا ناموجود است"})
         elif action == "approve":
             send_telegram("گزارش تأییدشده\n\n" + draft["text"])
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "گزارش منتشر شد"})
-            with draft_lock:
-                DRAFTS.pop(draft_id, None)
+            delete_draft(draft_id)
         elif action == "reject":
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "گزارش رد شد"})
-            with draft_lock:
-                DRAFTS.pop(draft_id, None)
+            delete_draft(draft_id)
     except Exception:
         log.exception("Callback processing failed")
         if callback_id:
