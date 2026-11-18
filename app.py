@@ -21,7 +21,7 @@ draft_lock = Lock()
 DRAFTS = {}
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", os.getenv("TELEGRAM_CHAT_ID", "")).split(",") if x.strip()]
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 ADMIN_IDS = {x.strip() for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if x.strip()}
 BINANCE_BASE = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
@@ -95,13 +95,25 @@ def telegram_call(method, payload):
     return data["result"]
 
 
-def send_telegram(text, reply_markup=None):
-    if not TELEGRAM_CHAT_ID:
-        raise RuntimeError("TELEGRAM_CHAT_ID is not configured")
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "disable_web_page_preview": True}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    return telegram_call("sendMessage", payload)
+def send_telegram(text, reply_markup=None, skip_chat_ids=None):
+    """Send to every configured destination; report partial failures without hiding them."""
+    if not TELEGRAM_CHAT_IDS:
+        raise RuntimeError("TELEGRAM_CHAT_IDS is not configured")
+    skipped = set(skip_chat_ids or [])
+    result = {"sent": [], "failed": []}
+    for chat_id in TELEGRAM_CHAT_IDS:
+        if chat_id in skipped:
+            continue
+        payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        try:
+            telegram_call("sendMessage", payload)
+            result["sent"].append(chat_id)
+        except Exception as exc:
+            log.exception("Telegram delivery failed for destination %s", chat_id)
+            result["failed"].append({"chat_id": chat_id, "error": str(exc)[:300]})
+    return result
 
 
 def is_admin(user_id):
@@ -206,10 +218,21 @@ def telegram_callback():
         if not draft:
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "پیش‌نویس منقضی یا ناموجود است"})
         elif action == "approve":
-            send_telegram("گزارش تأییدشده\n\n" + draft["text"])
-            telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "گزارش منتشر شد"})
+            delivery = send_telegram(
+                "گزارش تأییدشده\n\n" + draft["text"],
+                skip_chat_ids=draft.get("sent_to", [])
+            )
             with draft_lock:
-                DRAFTS.pop(draft_id, None)
+                draft["sent_to"] = list(set(draft.get("sent_to", []) + delivery["sent"]))
+            if delivery["failed"]:
+                telegram_call("answerCallbackQuery", {
+                    "callback_query_id": callback_id,
+                    "text": f"ارسال ناقص: {len(delivery['sent'])} مقصد موفق، {len(delivery['failed'])} مقصد ناموفق؛ برای تلاش مجدد دوباره تأیید کنید"
+                })
+            else:
+                telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": f"گزارش به {len(delivery['sent'])} مقصد ارسال شد"})
+                with draft_lock:
+                    DRAFTS.pop(draft_id, None)
         elif action == "reject":
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "گزارش رد شد"})
             with draft_lock:
