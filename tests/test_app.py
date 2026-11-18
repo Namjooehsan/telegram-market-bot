@@ -72,3 +72,20 @@ def test_draft_command_requires_valid_webhook_secret(monkeypatch):
     assert len(sent) == 1
     assert "sample report" in sent[0]["text"]
     assert sent[0]["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == "approve:draft-1"
+
+
+def test_drafts_persist_in_sqlite(tmp_path, monkeypatch):
+    db_path = tmp_path / "drafts.sqlite3"
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(db_path))
+    monkeypatch.setattr(market_app, "make_report", lambda: ("persistent report", [{"symbol": "BTCUSDT"}]))
+
+    draft_id, body = market_app.create_draft()
+    stored = market_app.get_draft(draft_id)
+
+    assert body == "persistent report"
+    assert stored["text"] == "persistent report"
+    assert stored["data"] == [{"symbol": "BTCUSDT"}]
+    assert stored["status"] == "pending"
+
+    market_app.delete_draft(draft_id)
+    assert market_app.get_draft(draft_id) is None
