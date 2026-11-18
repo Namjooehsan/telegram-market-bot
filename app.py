@@ -872,48 +872,27 @@ def telegram_webhook():
             })
         elif command == "/plans":
             status_text = (
-                f"پلن پریمیوم: {PREMIUM_DURATION_DAYS} روز | مبلغ: {PREMIUM_PRICE} {PAYMENT_ASSET}"
-                if payment_setup_ready()
-                else "پلن پریمیوم در حال آماده‌سازی است؛ پرداخت هنوز فعال نشده است."
-            )
+                f"پریمیوم {PREMIUM_DURATION_DAYS} روزه: {STARS_PREMIUM_PRICE} Stars"
+                if stars_product("premium_30d")
+                else "پریمیوم: قیمت Stars هنوز توسط مدیر تنظیم نشده است."
+            ) + (
+                f"\nایده کسب‌وکار اختصاصی: {STARS_IDEA_PRICE} Stars"
+                if stars_product("business_idea")
+                else "\nایده اختصاصی: قیمت Stars هنوز تنظیم نشده است."
+            ) + "\nخرید خدمات دیجیتال در تلگرام فقط با Telegram Stars انجام می‌شود."
             telegram_call("sendMessage", {"chat_id": chat_id, "text": status_text})
         elif command == "/pay":
-            invoice_id = create_payment_invoice(user_id)
-            if not invoice_id:
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": "پرداخت هنوز فعال نشده است. تا تعیین دارایی، شبکه، مبلغ و آدرس دریافت، واریز انجام نده."
-                })
-            else:
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": (
-                        f"فاکتور: {invoice_id}\nمبلغ: {PREMIUM_PRICE} {PAYMENT_ASSET}\n"
-                        f"شبکه: {PAYMENT_NETWORK}\nآدرس دریافت: {PAYMENT_RECEIVE_ADDRESS}\n"
-                        "پس از انتقال دستور زیر را بفرست:\n"
-                        f"/paid {invoice_id} TXID"
-                    )
-                })
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "برای خرید خدمات دیجیتال داخل تلگرام از /premium استفاده کن؛ پرداخت با Stars است. "
+                "آدرس‌های رمزارزی فقط برای حمایت اختیاری در /support نمایش داده می‌شوند."
+            })
         elif command == "/paid":
-            fields = argument.split(maxsplit=1)
-            if len(fields) != 2 or len(fields[1]) < 12:
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id, "text": "فرمت درست: /paid شناسه‌فاکتور هش‌تراکنش"
-                })
-            elif submit_payment(fields[0], user_id, fields[1]):
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": "درخواست ثبت شد؛ پس از بررسی دستی تراکنش توسط مدیر، اشتراک فعال می‌شود."
-                })
-                for admin_id in ADMIN_IDS:
-                    telegram_call("sendMessage", {
-                        "chat_id": admin_id,
-                        "text": f"پرداخت برای بررسی: {fields[0]}\nکاربر: {user_id}\nTXID: {fields[1]}"
-                    })
-            else:
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id, "text": "فاکتور معتبر و در انتظار پرداخت برای این حساب پیدا نشد."
-                })
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "برای خدمات دیجیتال داخل تلگرام، انتقال رمزارزی فاکتور اشتراک محسوب نمی‌شود. "
+                "از /premium با Stars استفاده کن؛ حمایت رمزارزی اختیاری در /support است."
+            })
         elif command == "/ask":
             if not is_premium_user(user_id):
                 telegram_call("sendMessage", {
@@ -956,7 +935,8 @@ def telegram_webhook():
                 "text": (
                     f"سرویس: فعال\nهوش مصنوعی: {'کلید ثبت شده' if OPENAI_API_KEY else 'منتظر کلید'}"
                     f"\nمدل: {OPENAI_MODEL}\nزمان‌بندی تهران: {schedule}"
-                    f"\nپرداخت: {'آماده تنظیم' if payment_setup_ready() else 'غیرفعال'}"
+                    f"\nپرداخت Stars: {'تنظیم شده' if stars_product('premium_30d') else 'منتظر تعیین قیمت'}"
+                    f"\nآدرس‌های حمایت: {'ثبت شده' if any([SUPPORT_BTC_ADDRESS, SUPPORT_BCH_ADDRESS, SUPPORT_XRP_ADDRESS, SUPPORT_ADA_ADDRESS]) else 'ثبت نشده'}"
                     f"\nدارایی‌های تحت پایش: {', '.join(TRACKED_SYMBOLS)}"
                     f"\nمقصدهای انتشار: {len(TELEGRAM_CHAT_IDS)}"
                 )
@@ -980,7 +960,7 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": "درخواست رد شد." if rejected else "درخواست قابل رد پیدا نشد."
             })
-        elif not admin and command not in ("/start", "/help", "/plans", "/pay", "/paid", "/ask", "/whales"):
+        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/support", "/wallet", "/paysupport"):
             return jsonify({"ok": True})
         elif command == "/draft" and admin:
             draft_id, body = create_draft()
