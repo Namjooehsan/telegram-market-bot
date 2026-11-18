@@ -892,9 +892,10 @@ def build_advertising_copy():
     if OPENAI_API_KEY and not OPENAI_AUTH_FAILED:
         language_names = ", ".join(f"{code}={LANGUAGES[code]}" for code in languages)
         generated = openai_text(
-            "Create one short, truthful, high-energy but non-manipulative campaign creative for this Telegram market-information bot. "
+            "Create one truthful, high-energy but non-manipulative multilingual campaign creative for this Telegram market-information bot. "
             "Localize it separately into these languages: " + language_names + ". "
-            "For each language use a heading like [fa], then 1-2 short sentences and a natural call to action. "
+            "Return exactly one short line per language, each beginning with its [code], with one sentence of at most 10 words and a natural call to action. "
+            "Keep the entire generated text under 3000 characters; do not add introductions, explanations, or repeated links. "
             "Claims are limited to market snapshots, educational market reports, volume-anomaly alerts, and public business-opportunity research. "
             "Never promise profit, returns, guaranteed signals, exact predictions, or unavailable services. "
             "Never invent testimonials, awards, customers, statistics, or urgency. Output plain text only.",
@@ -902,7 +903,7 @@ def build_advertising_copy():
             "Avoid cultural, political, religious, or financial stereotypes. Avoid false claims and prohibited products.",
             max_output_tokens=4200
         )
-        if generated and len(generated.strip()) > 40:
+        if generated and 40 < len(generated.strip()) <= 3400:
             return generated.strip() + "\n\n" + (
                 "Bot: " + (bot_link or "Telegram bot") +
                 "\nChannel: https://t.me/BTCanalizor\nCommunity: https://t.me/thebesttimetobuybtc"
