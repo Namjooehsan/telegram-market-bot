@@ -191,7 +191,9 @@ class AdvertisingCenter:
             row = conn.execute(
                 "SELECT status FROM ad_creatives WHERE creative_id = ?", (creative_id,)
             ).fetchone()
-            if not row or row["status"] not in ("approved", "published"):
+            # Only approved-but-not-yet-published creatives can add delivery rows.
+            # A published creative is terminal and cannot be published twice.
+            if not row or row["status"] != "approved":
                 return False
             for item in deliveries:
                 conn.execute("""
