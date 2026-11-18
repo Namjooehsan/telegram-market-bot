@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -5,6 +6,9 @@ from types import SimpleNamespace
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "test-secret")
+os.environ.setdefault("TELEGRAM_ADMIN_IDS", "12345")
+
 import app
 
 
