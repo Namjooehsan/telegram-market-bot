@@ -6,6 +6,9 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import requests
 from flask import Flask, jsonify, request
@@ -153,6 +156,63 @@ def delete_draft(draft_id):
         connection.execute("DELETE FROM drafts WHERE draft_id = ?", (draft_id,))
 
 
+def scheduled_draft():
+    """Create a private approval draft for the configured Telegram admin."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_WEBHOOK_SECRET or not ADMIN_IDS:
+        log.warning("Scheduled draft skipped: Telegram token, webhook secret, or admin ID is missing")
+        return
+    draft_id, body = create_draft()
+    keyboard = {"inline_keyboard": [[
+        {"text": "تأیید و انتشار در کانال و گروه", "callback_data": f"approve:{draft_id}"},
+        {"text": "رد گزارش", "callback_data": f"reject:{draft_id}"}
+    ]]}
+    for admin_id in ADMIN_IDS:
+        telegram_call("sendMessage", {
+            "chat_id": admin_id,
+            "text": f"پیش‌نویس زمان‌بندی‌شده {draft_id}\\n\\n{body}",
+            "reply_markup": keyboard
+        })
+
+
+def start_scheduler():
+    if os.getenv("ENABLE_SCHEDULER", "false").lower() != "true":
+        log.info("Scheduled report jobs are disabled")
+        return None
+    scheduler = BackgroundScheduler(timezone=ZoneInfo("Asia/Tehran"))
+    for hour in (8, 12, 16, 21):
+        scheduler.add_job(
+            scheduled_draft,
+            "cron",
+            hour=hour,
+            minute=0,
+            id=f"market-draft-{hour:02d}",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600
+        )
+    scheduler.start()
+    log.info("Tehran schedule enabled: 08:00, 12:00, 16:00, 21:00")
+    return scheduler
+
+
+def configure_telegram_webhook():
+    public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+    if not (TELEGRAM_TOKEN and TELEGRAM_WEBHOOK_SECRET and public_domain):
+        log.warning("Telegram webhook not configured: token, secret, or public domain missing")
+        return
+    try:
+        telegram_call("setWebhook", {
+            "url": f"https://{public_domain}/telegram/webhook",
+            "secret_token": TELEGRAM_WEBHOOK_SECRET,
+            "allowed_updates": ["message", "callback_query"],
+            "drop_pending_updates": False
+        })
+        log.info("Telegram webhook configured")
+    except Exception:
+        log.exception("Could not configure Telegram webhook")
+
+
 def create_draft():
     body, data = make_report()
     draft_id = uuid.uuid4().hex[:16]
@@ -268,6 +328,11 @@ def telegram_callback():
             except Exception:
                 pass
     return jsonify({"ok": True})
+
+
+# Railway runs a single Gunicorn worker for this service; enable jobs explicitly in production.
+scheduler = start_scheduler()
+configure_telegram_webhook()
 
 
 if __name__ == "__main__":
