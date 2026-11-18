@@ -49,6 +49,7 @@ def test_attribution_and_paid_stars_reporting(tmp_path):
     center.ensure_default_campaign()
     assert center.record_start_attribution(77, "ad_brand-launch")
     assert not center.record_start_attribution(78, "ad_unknown-campaign")
+    local_now = datetime.now().astimezone()
     now = datetime.now(timezone.utc).isoformat()
     with center.connect() as conn:
         conn.execute(
@@ -56,6 +57,6 @@ def test_attribution_and_paid_stars_reporting(tmp_path):
             ("payload-1", "77", "premium_30d", 120, "paid", now, now),
         )
     assert center.bind_order_to_user(77, "payload-1") == "brand-launch"
-    report = center.revenue_report()
+    report = center.revenue_report(datetime.now().astimezone())
     assert report["stars"][0]["stars_total"] == 120
     assert report["attributed_stars"][0]["campaign_id"] == "brand-launch"
