@@ -143,3 +143,52 @@ def test_ai_daily_quota_is_enforced(tmp_path, monkeypatch):
     assert market_app.consume_ai_quota() is True
     assert market_app.consume_ai_quota() is True
     assert market_app.consume_ai_quota() is False
+
+
+def test_stars_order_is_bound_to_user_and_exact_amount(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "stars.sqlite3"))
+    monkeypatch.setattr(market_app, "STARS_PREMIUM_PRICE", 77)
+    order = market_app.create_stars_order("67890", "premium_30d")
+    assert order
+    payload, product = order
+    assert product["price"] == 77
+    valid = {
+        "invoice_payload": payload,
+        "from": {"id": 67890},
+        "currency": "XTR",
+        "total_amount": 77,
+    }
+    assert market_app.stars_pre_checkout_is_valid(valid) is True
+    assert market_app.stars_pre_checkout_is_valid({**valid, "from": {"id": 99999}}) is False
+    assert market_app.stars_pre_checkout_is_valid({**valid, "total_amount": 76}) is False
+
+
+def test_successful_stars_payment_grants_premium_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "stars.sqlite3"))
+    monkeypatch.setattr(market_app, "STARS_PREMIUM_PRICE", 77)
+    monkeypatch.setattr(market_app, "PREMIUM_DURATION_DAYS", 30)
+    order = market_app.create_stars_order("67890", "premium_30d")
+    payload, _ = order
+    payment = {
+        "invoice_payload": payload,
+        "currency": "XTR",
+        "total_amount": 77,
+        "telegram_payment_charge_id": "charge-test-0001",
+    }
+    assert market_app.complete_stars_payment("67890", payment) == "premium_30d"
+    assert market_app.is_premium_user("67890") is True
+    assert market_app.complete_stars_payment("67890", payment) is None
+
+
+def test_zero_stars_price_keeps_product_disabled(monkeypatch):
+    monkeypatch.setattr(market_app, "STARS_IDEA_PRICE", 0)
+    assert market_app.stars_product("business_idea") is None
+
+
+def test_support_wallets_show_xrp_destination_tag(monkeypatch):
+    monkeypatch.setattr(market_app, "SUPPORT_XRP_ADDRESS", "rTestAddress")
+    monkeypatch.setattr(market_app, "SUPPORT_XRP_TAG", "123456")
+    support_text = market_app.support_wallet_text()
+    assert "rTestAddress" in support_text
+    assert "123456" in support_text
+    assert "حمایت اختیاری" in support_text

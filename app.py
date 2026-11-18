@@ -2,6 +2,7 @@ import os
 import hmac
 import logging
 import json
+import random
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -44,6 +45,31 @@ PAYMENT_RECEIVE_ADDRESS = os.getenv("PAYMENT_RECEIVE_ADDRESS", "")
 PREMIUM_PRICE = os.getenv("PREMIUM_PRICE", "")
 PREMIUM_DURATION_DAYS = int(os.getenv("PREMIUM_DURATION_DAYS", "30"))
 AI_DAILY_REQUEST_LIMIT = max(0, int(os.getenv("AI_DAILY_REQUEST_LIMIT", "12")))
+STARS_PREMIUM_PRICE = max(0, int(os.getenv("STARS_PREMIUM_PRICE", "0")))
+STARS_IDEA_PRICE = max(0, int(os.getenv("STARS_IDEA_PRICE", "0")))
+WALLET_BOT_USERNAME = os.getenv("TELEGRAM_WALLET_BOT_USERNAME", "EhsanWallet_bot").strip().lstrip("@")
+SUPPORT_BTC_ADDRESS = os.getenv("SUPPORT_BTC_ADDRESS", "")
+SUPPORT_BCH_ADDRESS = os.getenv("SUPPORT_BCH_ADDRESS", "")
+SUPPORT_XRP_ADDRESS = os.getenv("SUPPORT_XRP_ADDRESS", "")
+SUPPORT_XRP_TAG = os.getenv("SUPPORT_XRP_TAG", "")
+SUPPORT_ADA_ADDRESS = os.getenv("SUPPORT_ADA_ADDRESS", "")
+
+QUIZ_BANK = [
+    {"q": "بیت‌کوین در چه سالی راه‌اندازی شد؟", "choices": ["A) ۲۰۰۸", "B) ۲۰۰۹", "C) ۲۰۱۱"], "answer": "b", "why": "شبکه بیت‌کوین در ژانویه ۲۰۰۹ فعال شد."},
+    {"q": "کدام شاخص حجم معاملات بر حسب USDT را نشان می‌دهد؟", "choices": ["A) quoteVolume", "B) openTime", "C) highPrice"], "answer": "a", "why": "quoteVolume ارزش مظنه‌شده معاملات را نشان می‌دهد."},
+    {"q": "آیا جهش حجم به‌تنهایی ورود نهنگ را ثابت می‌کند؟", "choices": ["A) بله", "B) خیر", "C) همیشه"], "answer": "b", "why": "جهش حجم فقط یک نشانه آماری است و به داده‌های تکمیلی نیاز دارد."},
+]
+RIDDLE_BANK = [
+    ("آن چیست که هرچه بیشتر از آن برداری، بزرگ‌تر می‌شود؟", "چاله"),
+    ("بی‌صدا بالا و پایین می‌رود و قیمت‌ها را نشان می‌دهد؛ چیست؟", "نمودار"),
+    ("کلید دارد اما در را باز نمی‌کند؛ در دنیای رمزارز هم مهم است؛ چیست؟", "کلید خصوصی"),
+]
+JOKES = [
+    "معامله‌گر گفت: حد ضرر گذاشتم. بازار پرسید: کجا؟ گفت: روی امیدم!",
+    "چرا بلاک‌چین هیچ‌وقت تنها نیست؟ چون همیشه چند نود دوروبرش هستند!",
+    "به ربات گفتم آینده را پیش‌بینی کن؛ گفت: اول لطفاً داده‌های گذشته را دست‌کاری نکن!",
+]
+ACTIVE_QUIZZES = {}
 
 
 def binance_get(path, params=None):
@@ -291,6 +317,18 @@ def draft_db():
             request_count INTEGER NOT NULL DEFAULT 0
         )
     """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS stars_orders (
+            payload TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            product_code TEXT NOT NULL,
+            stars_amount INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            telegram_charge_id TEXT UNIQUE,
+            created_at TEXT NOT NULL,
+            paid_at TEXT
+        )
+    """)
     return connection
 
 
@@ -334,6 +372,138 @@ def payment_setup_ready():
         PAYMENTS_ENABLED and PAYMENT_ASSET and PAYMENT_NETWORK
         and PAYMENT_RECEIVE_ADDRESS and PREMIUM_PRICE
     )
+
+
+def stars_product(product_code):
+    products = {
+        "premium_30d": {
+            "title": "اشتراک پریمیوم ۳۰ روزه",
+            "description": "دسترسی ۳۰ روزه به تحلیل تعاملی و امکانات ویژه ربات",
+            "price": STARS_PREMIUM_PRICE,
+        },
+        "business_idea": {
+            "title": "ایده کسب‌وکار اختصاصی با هوش مصنوعی",
+            "description": "یک ایده کاربردی همراه با مشتری هدف، هزینه شروع و روش اعتبارسنجی",
+            "price": STARS_IDEA_PRICE,
+        },
+    }
+    product = products.get(product_code)
+    return product if product and 1 <= product["price"] <= 25000 else None
+
+
+def create_stars_order(user_id, product_code):
+    product = stars_product(product_code)
+    if not product:
+        return None
+    payload = "S" + uuid.uuid4().hex
+    with draft_db() as connection:
+        connection.execute(
+            """INSERT INTO stars_orders
+            (payload, user_id, product_code, stars_amount, created_at)
+            VALUES (?, ?, ?, ?, ?)""",
+            (payload, str(user_id), product_code, product["price"],
+             datetime.now(timezone.utc).isoformat())
+        )
+    return payload, product
+
+
+def get_stars_order(payload):
+    with draft_db() as connection:
+        row = connection.execute(
+            """SELECT user_id, product_code, stars_amount, status
+            FROM stars_orders WHERE payload = ?""", (payload,)
+        ).fetchone()
+    if not row:
+        return None
+    return {"user_id": row[0], "product_code": row[1],
+            "stars_amount": row[2], "status": row[3]}
+
+
+def send_stars_invoice(chat_id, user_id, product_code):
+    order = create_stars_order(user_id, product_code)
+    if not order:
+        return False
+    payload, product = order
+    telegram_call("sendInvoice", {
+        "chat_id": chat_id,
+        "title": product["title"],
+        "description": product["description"],
+        "payload": payload,
+        "currency": "XTR",
+        "prices": [{"label": product["title"], "amount": product["price"]}],
+    })
+    return True
+
+
+def stars_pre_checkout_is_valid(query):
+    order = get_stars_order(query.get("invoice_payload", ""))
+    sender_id = str((query.get("from") or {}).get("id", ""))
+    return bool(
+        order and order["status"] == "pending"
+        and order["user_id"] == sender_id
+        and query.get("currency") == "XTR"
+        and query.get("total_amount") == order["stars_amount"]
+    )
+
+
+def complete_stars_payment(user_id, payment):
+    payload = payment.get("invoice_payload", "")
+    charge_id = payment.get("telegram_payment_charge_id", "")
+    if payment.get("currency") != "XTR" or not charge_id:
+        return None
+    now = datetime.now(timezone.utc)
+    with draft_db() as connection:
+        row = connection.execute(
+            """SELECT user_id, product_code, stars_amount, status
+            FROM stars_orders WHERE payload = ?""", (payload,)
+        ).fetchone()
+        if (not row or row[0] != str(user_id) or row[3] != "pending"
+                or row[2] != payment.get("total_amount")):
+            return None
+        cursor = connection.execute(
+            """UPDATE stars_orders SET status = 'paid',
+            telegram_charge_id = ?, paid_at = ?
+            WHERE payload = ? AND status = 'pending'""",
+            (charge_id, now.isoformat(), payload)
+        )
+        if cursor.rowcount != 1:
+            return None
+        if row[1] == "premium_30d":
+            current = connection.execute(
+                "SELECT expires_at FROM premium_members WHERE user_id = ?",
+                (str(user_id),)
+            ).fetchone()
+            base = datetime.fromisoformat(current[0]) if current and datetime.fromisoformat(current[0]) > now else now
+            expires_at = (base + timedelta(days=PREMIUM_DURATION_DAYS)).isoformat()
+            connection.execute(
+                """INSERT INTO premium_members (user_id, expires_at, granted_at)
+                VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+                expires_at = excluded.expires_at, granted_at = excluded.granted_at""",
+                (str(user_id), expires_at, now.isoformat())
+            )
+    return row[1]
+
+
+def support_wallet_text():
+    lines = ["آدرس‌های حمایت اختیاری (بدون فعال‌سازی اشتراک یا خدمت دیجیتال):"]
+    if SUPPORT_BTC_ADDRESS:
+        lines.append(f"Bitcoin | شبکه BTC:\n{SUPPORT_BTC_ADDRESS}")
+    if SUPPORT_BCH_ADDRESS:
+        lines.append(f"Bitcoin Cash | شبکه BCH:\n{SUPPORT_BCH_ADDRESS}")
+    if SUPPORT_XRP_ADDRESS:
+        lines.append(f"XRP | شبکه XRP:\n{SUPPORT_XRP_ADDRESS}")
+        if SUPPORT_XRP_TAG:
+            lines.append(f"Destination Tag الزامی: {SUPPORT_XRP_TAG}")
+    if SUPPORT_ADA_ADDRESS:
+        lines.append(f"Cardano | شبکه Cardano:\n{SUPPORT_ADA_ADDRESS}")
+    if len(lines) == 1:
+        lines.append("آدرس حمایتی هنوز روی سرور پیکربندی نشده است.")
+    lines += [
+        "قبل از انتقال، نام رمزارز و شبکه را دقیق تطبیق بده.",
+        "این آدرس‌ها صرفاً برای حمایت اختیاری‌اند؛ خرید خدمات دیجیتال داخل تلگرام با Telegram Stars انجام می‌شود.",
+        "هیچ‌وقت عبارت بازیابی یا کلید خصوصی را برای ربات ارسال نکن."
+    ]
+    return "\n".join(lines)
 
 
 def is_premium_user(user_id):
@@ -472,7 +642,7 @@ def configure_telegram_webhook():
         telegram_call("setWebhook", {
             "url": f"https://{public_domain}/telegram/webhook",
             "secret_token": TELEGRAM_WEBHOOK_SECRET,
-            "allowed_updates": ["message", "callback_query"],
+            "allowed_updates": ["message", "callback_query", "pre_checkout_query"],
             "drop_pending_updates": False
         })
         log.info("Telegram webhook configured")
@@ -535,9 +705,46 @@ def telegram_webhook():
     if not TELEGRAM_WEBHOOK_SECRET or not hmac.compare_digest(supplied, TELEGRAM_WEBHOOK_SECRET):
         return jsonify({"error": "unauthorized"}), 401
     update = request.get_json(silent=True) or {}
+    pre_checkout = update.get("pre_checkout_query")
+    if pre_checkout:
+        valid = stars_pre_checkout_is_valid(pre_checkout)
+        checkout_payload = {"pre_checkout_query_id": pre_checkout.get("id"), "ok": valid}
+        if not valid:
+            checkout_payload["error_message"] = "فاکتور معتبر نیست یا مبلغ آن تغییر کرده است."
+        telegram_call("answerPreCheckoutQuery", checkout_payload)
+        return jsonify({"ok": True})
+
     if update.get("callback_query"):
         return telegram_callback()
     message = update.get("message") or {}
+    successful_payment = message.get("successful_payment")
+    if successful_payment:
+        payment_user = (message.get("from") or {}).get("id")
+        product_code = complete_stars_payment(payment_user, successful_payment)
+        chat_id = str((message.get("chat") or {}).get("id", ""))
+        if product_code == "premium_30d":
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": f"پرداخت موفق بود؛ اشتراک پریمیوم شما برای {PREMIUM_DURATION_DAYS} روز فعال شد."
+            })
+        elif product_code == "business_idea":
+            idea = openai_text(
+                "یک ایده کسب‌وکار دیجیتال کم‌هزینه و قانونی برای شروع در ایران پیشنهاد بده. "
+                "مشتری هدف، مسئله، راه درآمد، نسخه اولیه در ۷ روز، هزینه‌ها و سه آزمایش اعتبارسنجی را توضیح بده. "
+                "سود یا درآمد قطعی وعده نده.",
+                "به فارسی دقیق و اجرایی بنویس. فرض‌ها را از واقعیت جدا کن و از وعده درآمد تضمینی خودداری کن.",
+                max_output_tokens=900
+            ) or "پرداخت ثبت شد؛ تولید ایده هوشمند فعلاً در دسترس نیست. برای پیگیری دستور /paysupport را بفرست."
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": telegram_safe_text("ایده اختصاصی شما:\n\n" + idea)
+            })
+        else:
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "وضعیت سفارش نیازمند بررسی پشتیبانی است. دستور /paysupport را بفرست."
+            })
+        return jsonify({"ok": True})
     user = message.get("from") or {}
     user_id = user.get("id")
     chat_id = str((message.get("chat") or {}).get("id", ""))
@@ -552,58 +759,140 @@ def telegram_webhook():
                 "chat_id": chat_id,
                 "text": (
                     "ربات پایش بازار رمزارز\n"
-                    "/plans پلن‌ها\n/pay فاکتور اشتراک (پس از فعال‌سازی پرداخت)\n"
-                    "/paid شناسه‌فاکتور هش‌تراکنش\n"
-                    "/ask پرسش تحلیلی ویژه مدیر و اعضای پریمیوم\n"
-                    "/whales بررسی جهش‌های حجم\n"
+                    "/menu نمایش امکانات\n/price BTC قیمت و وضعیت بازار\n"
+                    "/whales پایش جهش حجم\n/ask پرسش تحلیلی ویژه\n"
+                    "/idea ایده کسب‌وکار روز\n/quiz آزمون کوتاه\n"
+                    "/riddle معما\n/joke سرگرمی\n"
+                    "/plans پلن‌ها\n/premium خرید پریمیوم با Stars\n"
+                    "/businessidea خرید ایده اختصاصی با Stars\n"
+                    "/support آدرس حمایت اختیاری\n/wallet ورود به ربات کیف پول\n"
+                    "/paysupport پشتیبانی پرداخت\n"
                     "/draft ساخت پیش‌نویس (مدیر)\n/status وضعیت سرویس (مدیر)\n"
-                    "انتشار فقط پس از تأیید مدیر انجام می‌شود."
+                    "انتشار گزارش‌های کانال فقط پس از تأیید مدیر انجام می‌شود."
                 )
+            })
+        elif command == "/menu":
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": (
+                    "مرکز خدمات ربات\n\n"
+                    "بازار: /price BTC | /whales | /ask\n"
+                    "کسب‌وکار: /idea | /businessidea\n"
+                    "سرگرمی: /quiz | /answer B | /riddle | /joke\n"
+                    "اشتراک و پرداخت: /plans | /premium | /support | /wallet | /paysupport"
+                )
+            })
+        elif command == "/joke":
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": random.choice(JOKES)})
+        elif command == "/riddle":
+            question, answer = random.choice(RIDDLE_BANK)
+            ACTIVE_QUIZZES[str(user_id)] = {"answer": answer.casefold(), "kind": "riddle"}
+            telegram_call("sendMessage", {
+                "chat_id": chat_id, "text": "معما:\n" + question + "\n\nپاسخ را با /answer جواب بده."
+            })
+        elif command == "/quiz":
+            item = random.choice(QUIZ_BANK)
+            ACTIVE_QUIZZES[str(user_id)] = {"answer": item["answer"], "why": item["why"], "kind": "quiz"}
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "آزمون بازار:\n" + item["q"] + "\n" + "\n".join(item["choices"]) + "\n\nپاسخ: /answer A"
+            })
+        elif command == "/answer":
+            active = ACTIVE_QUIZZES.get(str(user_id))
+            if not active:
+                reply = "ابتدا /quiz یا /riddle را اجرا کن."
+            elif argument.casefold().strip() == active["answer"]:
+                reply = "درست است! " + active.get("why", "آفرین.")
+                ACTIVE_QUIZZES.pop(str(user_id), None)
+            else:
+                reply = "پاسخ درست نیست؛ دوباره تلاش کن."
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": reply})
+        elif command == "/price":
+            symbol = argument.split()[0].upper() if argument else "BTC"
+            symbol = symbol if symbol.endswith("USDT") else symbol + "USDT"
+            try:
+                row = market_snapshot(symbol)
+                reply = (
+                    f"{symbol}: {row['price']:,.6g} USDT\n"
+                    f"تغییر ۲۴ساعته: {row['change_24h_pct']:+.2f}%\n"
+                    f"حجم ۲۴ساعته: {row['quote_volume_24h']:,.0f} USDT\n"
+                    f"روند یک‌ساعته: {row['trend_1h']}\nمنبع: Binance Spot"
+                )
+            except Exception:
+                reply = "دریافت داده این نماد ممکن نشد؛ نماد USDT معتبر را امتحان کن."
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": reply})
+        elif command == "/idea":
+            idea = openai_text(
+                "یک ایده کوچک و قانونی برای کسب درآمد دیجیتال پیشنهاد بده. "
+                "مسئله مشتری، مشتری هدف، روش درآمد، MVP سه‌روزه و یک تست بازار ارزان را بگو. "
+                "درآمد تضمینی ادعا نکن.",
+                "به فارسی، دقیق و عملی بنویس. ایده تکراری و وعده سود قطعی نده.",
+                max_output_tokens=600
+            )
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": idea or "سهمیه یا سرویس هوش مصنوعی فعلاً در دسترس نیست؛ کمی بعد دوباره امتحان کن."
+            })
+        elif command == "/premium":
+            if not send_stars_invoice(chat_id, user_id, "premium_30d"):
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "خرید پریمیوم هنوز فعال نشده است؛ مدیر باید قیمت Telegram Stars را در Railway تنظیم کند."
+                })
+        elif command == "/businessidea":
+            if not send_stars_invoice(chat_id, user_id, "business_idea"):
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "خرید ایده اختصاصی هنوز فعال نشده است؛ مدیر باید قیمت Telegram Stars را در Railway تنظیم کند."
+                })
+        elif command == "/support":
+            keyboard = {"inline_keyboard": [[
+                {"text": "باز کردن کیف پول تلگرام", "url": f"https://t.me/{WALLET_BOT_USERNAME}"}
+            ]]} if WALLET_BOT_USERNAME else None
+            payload = {"chat_id": chat_id, "text": support_wallet_text()}
+            if keyboard:
+                payload["reply_markup"] = keyboard
+            telegram_call("sendMessage", payload)
+        elif command == "/wallet":
+            wallet_url = f"https://t.me/{WALLET_BOT_USERNAME}" if WALLET_BOT_USERNAME else "در Railway تنظیم نشده است."
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": (
+                    f"ربات کیف پول: {wallet_url}\n"
+                    "این لینک فقط ربات کیف پول را باز می‌کند؛ انتقال خودکار یا اتصال API هنوز برقرار نیست. "
+                    "برای اتصال پرداختی واقعی، دسترسی رسمی API یا اطلاعات پذیرنده لازم است. "
+                    "عبارت بازیابی و کلید خصوصی را هرگز ارسال نکن."
+                )
+            })
+        elif command == "/paysupport":
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "پشتیبانی پرداخت: شناسه فاکتور، زمان تراکنش و شرح مشکل را همین‌جا بفرست. "
+                "اطلاعات محرمانه کیف پول، کلید خصوصی یا عبارت بازیابی ارسال نکن."
             })
         elif command == "/plans":
             status_text = (
-                f"پلن پریمیوم: {PREMIUM_DURATION_DAYS} روز | مبلغ: {PREMIUM_PRICE} {PAYMENT_ASSET}"
-                if payment_setup_ready()
-                else "پلن پریمیوم در حال آماده‌سازی است؛ پرداخت هنوز فعال نشده است."
-            )
+                f"پریمیوم {PREMIUM_DURATION_DAYS} روزه: {STARS_PREMIUM_PRICE} Stars"
+                if stars_product("premium_30d")
+                else "پریمیوم: قیمت Stars هنوز توسط مدیر تنظیم نشده است."
+            ) + (
+                f"\nایده کسب‌وکار اختصاصی: {STARS_IDEA_PRICE} Stars"
+                if stars_product("business_idea")
+                else "\nایده اختصاصی: قیمت Stars هنوز تنظیم نشده است."
+            ) + "\nخرید خدمات دیجیتال در تلگرام فقط با Telegram Stars انجام می‌شود."
             telegram_call("sendMessage", {"chat_id": chat_id, "text": status_text})
         elif command == "/pay":
-            invoice_id = create_payment_invoice(user_id)
-            if not invoice_id:
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": "پرداخت هنوز فعال نشده است. تا تعیین دارایی، شبکه، مبلغ و آدرس دریافت، واریز انجام نده."
-                })
-            else:
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": (
-                        f"فاکتور: {invoice_id}\nمبلغ: {PREMIUM_PRICE} {PAYMENT_ASSET}\n"
-                        f"شبکه: {PAYMENT_NETWORK}\nآدرس دریافت: {PAYMENT_RECEIVE_ADDRESS}\n"
-                        "پس از انتقال دستور زیر را بفرست:\n"
-                        f"/paid {invoice_id} TXID"
-                    )
-                })
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "برای خرید خدمات دیجیتال داخل تلگرام از /premium استفاده کن؛ پرداخت با Stars است. "
+                "آدرس‌های رمزارزی فقط برای حمایت اختیاری در /support نمایش داده می‌شوند."
+            })
         elif command == "/paid":
-            fields = argument.split(maxsplit=1)
-            if len(fields) != 2 or len(fields[1]) < 12:
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id, "text": "فرمت درست: /paid شناسه‌فاکتور هش‌تراکنش"
-                })
-            elif submit_payment(fields[0], user_id, fields[1]):
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id,
-                    "text": "درخواست ثبت شد؛ پس از بررسی دستی تراکنش توسط مدیر، اشتراک فعال می‌شود."
-                })
-                for admin_id in ADMIN_IDS:
-                    telegram_call("sendMessage", {
-                        "chat_id": admin_id,
-                        "text": f"پرداخت برای بررسی: {fields[0]}\nکاربر: {user_id}\nTXID: {fields[1]}"
-                    })
-            else:
-                telegram_call("sendMessage", {
-                    "chat_id": chat_id, "text": "فاکتور معتبر و در انتظار پرداخت برای این حساب پیدا نشد."
-                })
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "برای خدمات دیجیتال داخل تلگرام، انتقال رمزارزی فاکتور اشتراک محسوب نمی‌شود. "
+                "از /premium با Stars استفاده کن؛ حمایت رمزارزی اختیاری در /support است."
+            })
         elif command == "/ask":
             if not is_premium_user(user_id):
                 telegram_call("sendMessage", {
@@ -646,7 +935,8 @@ def telegram_webhook():
                 "text": (
                     f"سرویس: فعال\nهوش مصنوعی: {'کلید ثبت شده' if OPENAI_API_KEY else 'منتظر کلید'}"
                     f"\nمدل: {OPENAI_MODEL}\nزمان‌بندی تهران: {schedule}"
-                    f"\nپرداخت: {'آماده تنظیم' if payment_setup_ready() else 'غیرفعال'}"
+                    f"\nپرداخت Stars: {'تنظیم شده' if stars_product('premium_30d') else 'منتظر تعیین قیمت'}"
+                    f"\nآدرس‌های حمایت: {'ثبت شده' if any([SUPPORT_BTC_ADDRESS, SUPPORT_BCH_ADDRESS, SUPPORT_XRP_ADDRESS, SUPPORT_ADA_ADDRESS]) else 'ثبت نشده'}"
                     f"\nدارایی‌های تحت پایش: {', '.join(TRACKED_SYMBOLS)}"
                     f"\nمقصدهای انتشار: {len(TELEGRAM_CHAT_IDS)}"
                 )
@@ -670,7 +960,7 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": "درخواست رد شد." if rejected else "درخواست قابل رد پیدا نشد."
             })
-        elif not admin and command not in ("/start", "/help", "/plans", "/pay", "/paid", "/ask", "/whales"):
+        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/support", "/wallet", "/paysupport"):
             return jsonify({"ok": True})
         elif command == "/draft" and admin:
             draft_id, body = create_draft()
