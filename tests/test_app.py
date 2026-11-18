@@ -89,3 +89,49 @@ def test_drafts_persist_in_sqlite(tmp_path, monkeypatch):
 
     market_app.delete_draft(draft_id)
     assert market_app.get_draft(draft_id) is None
+
+
+
+def test_openai_is_optional_without_api_key(monkeypatch):
+    monkeypatch.setattr(market_app, "OPENAI_API_KEY", "")
+    assert market_app.openai_text("hello", "system") is None
+
+
+def test_payment_setup_is_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(market_app, "PAYMENTS_ENABLED", False)
+    monkeypatch.setattr(market_app, "PAYMENT_ASSET", "BTC")
+    monkeypatch.setattr(market_app, "PAYMENT_NETWORK", "BTC")
+    monkeypatch.setattr(market_app, "PAYMENT_RECEIVE_ADDRESS", "public-address")
+    monkeypatch.setattr(market_app, "PREMIUM_PRICE", "10")
+    assert market_app.payment_setup_ready() is False
+
+
+def test_manual_payment_approval_grants_premium(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "bot.sqlite3"))
+    monkeypatch.setattr(market_app, "PAYMENTS_ENABLED", True)
+    monkeypatch.setattr(market_app, "PAYMENT_ASSET", "USDT")
+    monkeypatch.setattr(market_app, "PAYMENT_NETWORK", "TEST-NET")
+    monkeypatch.setattr(market_app, "PAYMENT_RECEIVE_ADDRESS", "test-receive-address")
+    monkeypatch.setattr(market_app, "PREMIUM_PRICE", "5")
+    monkeypatch.setattr(market_app, "PREMIUM_DURATION_DAYS", 30)
+    monkeypatch.setattr(market_app, "ADMIN_IDS", {"12345"})
+
+    invoice_id = market_app.create_payment_invoice("67890")
+    assert invoice_id
+    assert market_app.submit_payment(invoice_id, "67890", "a" * 64)
+    approved = market_app.approve_payment(invoice_id)
+
+    assert approved is not None
+    assert approved[0] == "67890"
+    assert market_app.is_premium_user("67890")
+
+
+def test_payment_invoice_cannot_be_submitted_by_another_user(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "bot.sqlite3"))
+    monkeypatch.setattr(market_app, "PAYMENTS_ENABLED", True)
+    monkeypatch.setattr(market_app, "PAYMENT_ASSET", "BTC")
+    monkeypatch.setattr(market_app, "PAYMENT_NETWORK", "BTC")
+    monkeypatch.setattr(market_app, "PAYMENT_RECEIVE_ADDRESS", "test-receive-address")
+    monkeypatch.setattr(market_app, "PREMIUM_PRICE", "0.001")
+    invoice_id = market_app.create_payment_invoice("67890")
+    assert market_app.submit_payment(invoice_id, "99999", "b" * 64) is False
