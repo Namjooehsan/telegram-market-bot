@@ -1186,6 +1186,8 @@ def telegram_webhook():
     argument = parts[1].strip() if len(parts) > 1 else ""
     admin = is_admin(user_id)
     try:
+        if command == "/start" and argument:
+            AD_CENTER.record_start_attribution(user_id, argument)
         if command in ("/start", "/help"):
             telegram_call("sendMessage", {
                 "chat_id": chat_id,
@@ -1202,6 +1204,8 @@ def telegram_webhook():
                     "/support آدرس حمایت اختیاری\n/wallet ورود به ربات کیف پول\n"
                     "/paysupport پشتیبانی پرداخت\n"
                     "/draft ساخت پیش‌نویس (مدیر)\n/status وضعیت سرویس (مدیر)\n"
+                    "/ads مرکز تبلیغات (مدیر) | /adnew پیش‌نویس روزانه (مدیر)\n"
+                    "/adreport گزارش درآمد واقعی (مدیر) | /adplatforms وضعیت کانال‌ها (مدیر)\n"
                     "انتشار گزارش‌های کانال فقط پس از تأیید مدیر انجام می‌شود."
                 )
             })
@@ -1215,7 +1219,8 @@ def telegram_webhook():
                     "ردیاب: /whalestatus | /whalealerts\n"
                     "حمایت و پرداخت: /plans | /donate BTC 0.001 | /tx ID TXID | /support\n"
                     "سرگرمی: /quiz | /answer B | /riddle | /joke\n"
-                    "اشتراک و پرداخت: /plans | /premium | /businessidea | /funpack | /support | /wallet | /paysupport"
+                    "اشتراک و پرداخت: /plans | /premium | /businessidea | /funpack | /support | /wallet | /paysupport\n"
+                    "مدیریت تبلیغات (مدیر): /ads | /adnew | /adreport | /adplatforms | /adlangs"
                 )
             })
         elif command == "/joke":
