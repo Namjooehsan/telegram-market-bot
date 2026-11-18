@@ -1655,6 +1655,53 @@ def telegram_callback():
                     "text": "وضعیت درخواست ثبت شد"
                 })
             return jsonify({"ok": True})
+        if action in ("adapprove", "adreject"):
+            if action == "adreject":
+                rejected = AD_CENTER.review_creative(draft_id, False)
+                telegram_call("answerCallbackQuery", {
+                    "callback_query_id": callback_id,
+                    "text": "تبلیغ رد شد." if rejected else "پیش‌نویس قبلاً بررسی شده یا وجود ندارد."
+                })
+                return jsonify({"ok": True})
+            creative = AD_CENTER.review_creative(draft_id, True)
+            if not creative:
+                telegram_call("answerCallbackQuery", {
+                    "callback_query_id": callback_id,
+                    "text": "این پیش‌نویس وجود ندارد یا دیگر قابل انتشار نیست."
+                })
+                return jsonify({"ok": True})
+            sent_before = AD_CENTER.delivered_destinations(draft_id)
+            deliveries = []
+            for destination in TELEGRAM_CHAT_IDS:
+                if destination in sent_before:
+                    continue
+                try:
+                    result = telegram_call("sendMessage", {
+                        "chat_id": destination,
+                        "text": telegram_safe_text(creative["body"]),
+                        "disable_web_page_preview": True
+                    })
+                    deliveries.append({
+                        "destination": destination, "status": "sent",
+                        "message_id": (result or {}).get("message_id")
+                    })
+                except Exception as exc:
+                    log.exception("Approved ad delivery failed for a configured Telegram destination")
+                    deliveries.append({
+                        "destination": destination, "status": "failed",
+                        "error": str(exc)[:250]
+                    })
+            published = AD_CENTER.mark_published(draft_id, deliveries)
+            telegram_call("answerCallbackQuery", {
+                "callback_query_id": callback_id,
+                "text": "تبلیغ منتشر شد." if published else "تأیید ثبت شد؛ انتشار کامل نشد."
+            })
+            if published:
+                telegram_call("sendMessage", {
+                    "chat_id": str(user_id),
+                    "text": f"انتشار تبلیغ {draft_id} در {len(TELEGRAM_CHAT_IDS)} مقصد پیکربندی‌شده تلگرام تأیید شد."
+                })
+            return jsonify({"ok": True})
         draft = get_draft(draft_id)
         if not draft:
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "پیش‌نویس منقضی یا ناموجود است"})
