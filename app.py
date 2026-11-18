@@ -989,6 +989,16 @@ def start_scheduler():
         log.info("Scheduled report jobs are disabled")
         return None
     scheduler = BackgroundScheduler(timezone=ZoneInfo("Asia/Tehran"))
+    scheduler.add_job(
+        scheduled_advertising_draft, "cron", hour=10, minute=0,
+        id="daily-advertising-draft", replace_existing=True,
+        coalesce=True, max_instances=1, misfire_grace_time=1800
+    )
+    scheduler.add_job(
+        scheduled_ad_revenue_report, "cron", hour=23, minute=50,
+        id="daily-ad-revenue-report", replace_existing=True,
+        coalesce=True, max_instances=1, misfire_grace_time=1800
+    )
     for hour in (8, 12, 16, 21):
         scheduler.add_job(
             scheduled_draft,
