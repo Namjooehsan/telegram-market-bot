@@ -108,7 +108,7 @@ def format_market_universe(markets=None):
             lines.extend([segment + ":", "، ".join(names), ""])
     lines.extend([
         "جستجوی زنده: /marketsearch عبارت",
-        "برخی حوزه‌ها نیازمند مجوزند؛ فعالیت‌های غیرقانونی و فریبکارانه حذف می‌شوند.",
+        "برخی حوزه‌ها نیازمند مجوزند؛ فعالیت‌های ممنوع و غیرقانونی یا فریبکارانه پیشنهاد نمی‌شوند.",
     ])
     return "\n".join(lines)
 
