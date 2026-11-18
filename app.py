@@ -231,12 +231,12 @@ def make_report():
     return "\n".join(lines), rows
 
 
-def telegram_call(method, payload):
+def telegram_call(method, payload, timeout=15):
     if not TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
     response = requests.post(
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
-        json=payload, timeout=15
+        json=payload, timeout=timeout
     )
     response.raise_for_status()
     data = response.json()
@@ -711,7 +711,7 @@ def telegram_webhook():
         checkout_payload = {"pre_checkout_query_id": pre_checkout.get("id"), "ok": valid}
         if not valid:
             checkout_payload["error_message"] = "فاکتور معتبر نیست یا مبلغ آن تغییر کرده است."
-        telegram_call("answerPreCheckoutQuery", checkout_payload)
+        telegram_call("answerPreCheckoutQuery", checkout_payload, timeout=8)
         return jsonify({"ok": True})
 
     if update.get("callback_query"):
