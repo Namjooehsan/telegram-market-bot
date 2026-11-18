@@ -5,6 +5,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 RUN useradd --create-home appuser && chown -R appuser:appuser /app
-USER appuser
+# Railway mounts persistent volumes at runtime; the service needs write access to /data.
+# Keep the container on the default user so SQLite can initialize the mounted volume.
 EXPOSE 8000
 CMD ["gunicorn", "--workers", "2", "--bind", "0.0.0.0:8000", "app:app"]
