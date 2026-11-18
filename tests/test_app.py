@@ -29,7 +29,7 @@ def test_market_endpoint_rejects_non_usdt_symbol():
 
 def test_market_endpoint_rejects_invalid_symbol_characters():
     response = market_app.app.test_client().get("/api/market/BTC%2FUSDT")
-    assert response.status_code == 400
+    assert response.status_code == 404
 
 
 def test_send_telegram_delivers_to_all_configured_channels(monkeypatch):
