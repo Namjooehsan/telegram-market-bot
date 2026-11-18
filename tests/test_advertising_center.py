@@ -1,6 +1,10 @@
 import sqlite3
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from advertising.center import AdvertisingCenter
 
 
