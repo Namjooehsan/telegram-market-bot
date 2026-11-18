@@ -13,6 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 import requests
 from opportunity_research import OpportunityResearcher, get_market_universe, format_market_universe, format_opportunity_digest
+from advertising import AdvertisingCenter, LANGUAGES, PLATFORMS
 from flask import Flask, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -26,12 +27,15 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 limiter = Limiter(get_remote_address, app=app, default_limits=["120 per hour"])
 DRAFT_DB_PATH = os.getenv("DRAFT_DB_PATH", "./data/drafts.sqlite3")
+AD_MAX_DAILY_DRAFTS = max(1, min(5, int(os.getenv("AD_MAX_DAILY_DRAFTS", "1"))))
+AD_CENTER = AdvertisingCenter(DRAFT_DB_PATH, max_daily_drafts=AD_MAX_DAILY_DRAFTS)
 OPPORTUNITY_RESEARCHER = OpportunityResearcher(DRAFT_DB_PATH)
 WHALE_TRACKER_API_URL = os.getenv("WHALE_TRACKER_API_URL", "https://whale-tracker-production-1a5d75ec.up.railway.app").rstrip("/")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", TELEGRAM_CHAT_ID).split(",") if x.strip()]
+TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "serchbestpriceforbtc_bot").strip().lstrip("@")
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 WEBHOOK_CONFIGURED = False
 ADMIN_IDS = {x.strip() for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if x.strip()}
@@ -380,6 +384,7 @@ def draft_db():
             paid_at TEXT
         )
     """)
+    AD_CENTER.ensure_schema(connection)
     return connection
 
 
@@ -461,6 +466,7 @@ def create_stars_order(user_id, product_code):
             (payload, str(user_id), product_code, product["price"],
              datetime.now(timezone.utc).isoformat())
         )
+    AD_CENTER.bind_order_to_user(user_id, payload)
     return payload, product
 
 
