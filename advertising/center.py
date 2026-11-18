@@ -168,9 +168,21 @@ class AdvertisingCenter:
                 WHERE creative_id = ? AND status = 'pending'
             """, (status, datetime.now(timezone.utc).isoformat(), creative_id))
             if cur.rowcount != 1:
-                return None
-            row = conn.execute("SELECT * FROM ad_creatives WHERE creative_id = ?", (creative_id,)).fetchone()
+                row = conn.execute("SELECT * FROM ad_creatives WHERE creative_id = ?", (creative_id,)).fetchone()
+                if not approved or not row or row["status"] != "approved":
+                    return None
+            else:
+                row = conn.execute("SELECT * FROM ad_creatives WHERE creative_id = ?", (creative_id,)).fetchone()
         return dict(row) if row else None
+
+    def delivered_destinations(self, creative_id):
+        with self.connect() as conn:
+            self.ensure_schema(conn)
+            rows = conn.execute(
+                "SELECT destination FROM ad_deliveries WHERE creative_id = ? AND status = 'sent'",
+                (creative_id,),
+            ).fetchall()
+        return {row["destination"] for row in rows}
 
     def mark_published(self, creative_id, deliveries):
         now = datetime.now(timezone.utc).isoformat()
