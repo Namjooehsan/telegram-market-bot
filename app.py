@@ -879,6 +879,111 @@ def scheduled_draft():
         })
 
 
+def build_advertising_copy():
+    """Generate a localized campaign draft; this function never publishes."""
+    configured = [x.strip().lower() for x in os.getenv(
+        "AD_LANGUAGES", "fa,en,ar,es,fr,de,ru,tr,zh,hi"
+    ).split(",") if x.strip()]
+    languages = [code for code in dict.fromkeys(configured) if code in LANGUAGES]
+    if "fa" not in languages:
+        languages.insert(0, "fa")
+    bot_link = AD_CENTER.campaign_link(TELEGRAM_BOT_USERNAME)
+    if OPENAI_API_KEY and not OPENAI_AUTH_FAILED:
+        language_names = ", ".join(f"{code}={LANGUAGES[code]}" for code in languages)
+        generated = openai_text(
+            "Create one short, truthful, high-energy but non-manipulative campaign creative for this Telegram market-information bot. "
+            "Localize it separately into these languages: " + language_names + ". "
+            "For each language use a heading like [fa], then 1-2 short sentences and a natural call to action. "
+            "Claims are limited to market snapshots, educational market reports, volume-anomaly alerts, and public business-opportunity research. "
+            "Never promise profit, returns, guaranteed signals, exact predictions, or unavailable services. "
+            "Never invent testimonials, awards, customers, statistics, or urgency. Output plain text only.",
+            "You are a careful international growth marketer and localization editor. Preserve legal caution in every language. "
+            "Avoid cultural, political, religious, or financial stereotypes. Avoid false claims and prohibited products.",
+            max_output_tokens=1600
+        )
+        if generated and len(generated.strip()) > 40:
+            return generated.strip() + "\n\n" + (
+                "Bot: " + (bot_link or "Telegram bot") +
+                "\nChannel: https://t.me/BTCanalizor\nCommunity: https://t.me/thebesttimetobuybtc"
+            ), tuple(languages)
+    fallback = (
+        "فارسی | اطلاعات بازار و فرصت‌های کسب‌وکار را با منبع و توضیح دنبال کن. "
+        "گزارش آموزشی، پایش جهش حجم و پژوهش فرصت‌ها؛ بدون وعده سود یا سیگنال قطعی.\n"
+        "ربات: " + (bot_link or "ربات تلگرام") +
+        "\nکانال: https://t.me/BTCanalizor | گروه: https://t.me/thebesttimetobuybtc\n\n"
+        "English | Follow market data and business-opportunity research with context and sources. "
+        "Educational reports and volume-anomaly monitoring — no promised returns or guaranteed signals."
+    )
+    return fallback, ("fa", "en")
+
+
+def create_advertising_draft():
+    if not TELEGRAM_TOKEN or not ADMIN_IDS:
+        log.warning("Advertising draft skipped: Telegram token or admin ID is missing")
+        return None, "telegram_not_configured"
+    campaign_id = AD_CENTER.ensure_default_campaign()
+    body, languages = build_advertising_copy()
+    creative_id, status = AD_CENTER.create_daily_creative(campaign_id, body, languages)
+    if not creative_id:
+        return None, status
+    keyboard = {"inline_keyboard": [[
+        {"text": "تأیید و انتشار", "callback_data": f"adapprove:{creative_id}"},
+        {"text": "رد تبلیغ", "callback_data": f"adreject:{creative_id}"}
+    ]]}
+    preview = (
+        f"پیش‌نویس تبلیغ روزانه | شناسه {creative_id}\n"
+        f"زبان‌ها: {', '.join(languages)}\n"
+        "وضعیت: فقط پیش‌نویس؛ تا تأیید مدیر هیچ مقصدی پیام دریافت نمی‌کند.\n\n"
+        + body
+    )
+    for admin_id in ADMIN_IDS:
+        telegram_call("sendMessage", {
+            "chat_id": admin_id,
+            "text": telegram_safe_text(preview),
+            "reply_markup": keyboard,
+            "disable_web_page_preview": True
+        })
+    return creative_id, "created"
+
+
+def scheduled_advertising_draft():
+    try:
+        creative_id, status = create_advertising_draft()
+        if creative_id:
+            log.info("Daily advertising draft created: %s", creative_id)
+        else:
+            log.info("Daily advertising draft skipped: %s", status)
+    except Exception:
+        log.exception("Daily advertising draft job failed")
+
+
+def scheduled_ad_revenue_report():
+    if not TELEGRAM_TOKEN or not ADMIN_IDS:
+        log.warning("Daily revenue report skipped: Telegram token or admin ID is missing")
+        return
+    try:
+        report = AD_CENTER.format_revenue_report()
+        for admin_id in ADMIN_IDS:
+            telegram_call("sendMessage", {
+                "chat_id": admin_id,
+                "text": telegram_safe_text(report),
+                "disable_web_page_preview": True
+            })
+    except Exception:
+        log.exception("Daily advertising revenue report failed")
+
+
+def advertising_platforms_text():
+    lines = ["درگاه‌های تبلیغاتی و وضعیت اتصال:"]
+    for item in PLATFORMS:
+        label = "آماده" if item["status"] == "available" else (
+            "در برنامه اتصال" if item["status"] == "planning" else "نیازمند اتصال رسمی"
+        )
+        lines.append(f"- {item['name']}: {label} — {item['note']}")
+    lines.append("\nفعلاً فقط Telegram به مقصدهای ثبت‌شده در Railway متصل است.")
+    return "\n".join(lines)
+
+
 def start_scheduler():
     if os.getenv("ENABLE_SCHEDULER", "false").lower() != "true":
         log.info("Scheduled report jobs are disabled")
