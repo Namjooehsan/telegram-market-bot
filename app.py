@@ -1332,6 +1332,40 @@ def telegram_webhook():
                 else "\nبسته سرگرمی: قیمت Stars هنوز تنظیم نشده است."
             ) + "\nخرید خدمات دیجیتال در تلگرام فقط با Telegram Stars انجام می‌شود."
             telegram_call("sendMessage", {"chat_id": chat_id, "text": status_text})
+        elif command == "/ads" and admin:
+            AD_CENTER.ensure_default_campaign()
+            campaigns = AD_CENTER.campaigns_summary()
+            lines = ["مرکز تبلیغات هوشمند", f"حد پیش‌نویس روزانه: {AD_MAX_DAILY_DRAFTS}", ""]
+            for item in campaigns:
+                lines.append(
+                    f"{item['campaign_id']} | {item['name']} | {item['status']} | "
+                    f"پیش‌نویس: {item['creatives'] or 0} | منتشرشده: {item['published'] or 0}"
+                )
+            lines += ["", "فرمان‌ها: /adnew /adreport /adplatforms /adlangs"]
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": telegram_safe_text("\n".join(lines))})
+        elif command == "/adnew" and admin:
+            creative_id, status = create_advertising_draft()
+            reply = f"پیش‌نویس تبلیغ ساخته شد: {creative_id}" if creative_id else (
+                "پیش‌نویس جدید ساخته نشد: سقف روزانه تکمیل شده یا اتصال تلگرام تنظیم نیست."
+            )
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": reply})
+        elif command == "/adreport" and admin:
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": telegram_safe_text(AD_CENTER.format_revenue_report()),
+                "disable_web_page_preview": True
+            })
+        elif command == "/adplatforms" and admin:
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": telegram_safe_text(advertising_platforms_text())
+            })
+        elif command == "/adlangs" and admin:
+            names = [f"{code}: {name}" for code, name in LANGUAGES.items()]
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "زبان‌های قابل درخواست برای تولید متن تبلیغاتی (نیازمند بازبینی انسانی):\n" + "\n".join(names)
+            })
         elif command == "/ideas":
             telegram_call("sendMessage", {
                 "chat_id": chat_id,
