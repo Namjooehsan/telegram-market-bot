@@ -30,6 +30,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", TELEGRAM_CHAT_ID).split(",") if x.strip()]
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+WEBHOOK_CONFIGURED = False
 ADMIN_IDS = {x.strip() for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if x.strip()}
 BINANCE_BASE = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -628,12 +629,25 @@ def start_scheduler():
             max_instances=1,
             misfire_grace_time=3600
         )
+    scheduler.add_job(
+        configure_telegram_webhook,
+        "interval",
+        minutes=max(5, int(os.getenv("TELEGRAM_WEBHOOK_RETRY_MINUTES", "10"))),
+        id="telegram-webhook-retry",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2)
+    )
     scheduler.start()
     log.info("Tehran schedule enabled: 08:00, 12:00, 16:00, 21:00")
     return scheduler
 
 
 def configure_telegram_webhook():
+    global WEBHOOK_CONFIGURED
+    if WEBHOOK_CONFIGURED:
+        return
     public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
     if not (TELEGRAM_TOKEN and TELEGRAM_WEBHOOK_SECRET and public_domain):
         log.warning("Telegram webhook not configured: token, secret, or public domain missing")
@@ -644,10 +658,11 @@ def configure_telegram_webhook():
             "secret_token": TELEGRAM_WEBHOOK_SECRET,
             "allowed_updates": ["message", "callback_query", "pre_checkout_query"],
             "drop_pending_updates": False
-        })
-        log.info("Telegram webhook configured")
-    except Exception:
-        log.exception("Could not configure Telegram webhook")
+        }, timeout=20)
+        WEBHOOK_CONFIGURED = True
+        log.info("Telegram webhook configured successfully")
+    except Exception as exc:
+        log.warning("Telegram webhook setup attempt failed; scheduled retry remains active: %s", type(exc).__name__)
 
 
 def create_draft():
