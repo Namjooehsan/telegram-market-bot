@@ -1,8 +1,14 @@
 import os
 import hmac
 import logging
+import json
+import sqlite3
+import uuid
 from datetime import datetime, timezone
-from threading import Lock
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import requests
 from flask import Flask, jsonify, request
@@ -17,8 +23,7 @@ log = logging.getLogger("market-bot")
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 limiter = Limiter(get_remote_address, app=app, default_limits=["120 per hour"])
-draft_lock = Lock()
-DRAFTS = {}
+DRAFT_DB_PATH = os.getenv("DRAFT_DB_PATH", "./data/drafts.sqlite3")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -119,11 +124,104 @@ def is_admin(user_id):
     return str(user_id) in ADMIN_IDS
 
 
+def draft_db():
+    db_path = Path(DRAFT_DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(db_path), timeout=10)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS drafts (
+            draft_id TEXT PRIMARY KEY,
+            body TEXT NOT NULL,
+            data_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending'
+        )
+    """)
+    return connection
+
+
+def get_draft(draft_id):
+    with draft_db() as connection:
+        row = connection.execute(
+            "SELECT body, data_json, created_at, status FROM drafts WHERE draft_id = ?",
+            (draft_id,)
+        ).fetchone()
+    if not row:
+        return None
+    return {"text": row[0], "data": json.loads(row[1]), "created": row[2], "status": row[3]}
+
+
+def delete_draft(draft_id):
+    with draft_db() as connection:
+        connection.execute("DELETE FROM drafts WHERE draft_id = ?", (draft_id,))
+
+
+def scheduled_draft():
+    """Create a private approval draft for the configured Telegram admin."""
+    if not TELEGRAM_TOKEN or not TELEGRAM_WEBHOOK_SECRET or not ADMIN_IDS:
+        log.warning("Scheduled draft skipped: Telegram token, webhook secret, or admin ID is missing")
+        return
+    draft_id, body = create_draft()
+    keyboard = {"inline_keyboard": [[
+        {"text": "تأیید و انتشار در کانال و گروه", "callback_data": f"approve:{draft_id}"},
+        {"text": "رد گزارش", "callback_data": f"reject:{draft_id}"}
+    ]]}
+    for admin_id in ADMIN_IDS:
+        telegram_call("sendMessage", {
+            "chat_id": admin_id,
+            "text": f"پیش‌نویس زمان‌بندی‌شده {draft_id}\n\n{body}",
+            "reply_markup": keyboard
+        })
+
+
+def start_scheduler():
+    if os.getenv("ENABLE_SCHEDULER", "false").lower() != "true":
+        log.info("Scheduled report jobs are disabled")
+        return None
+    scheduler = BackgroundScheduler(timezone=ZoneInfo("Asia/Tehran"))
+    for hour in (8, 12, 16, 21):
+        scheduler.add_job(
+            scheduled_draft,
+            "cron",
+            hour=hour,
+            minute=0,
+            id=f"market-draft-{hour:02d}",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600
+        )
+    scheduler.start()
+    log.info("Tehran schedule enabled: 08:00, 12:00, 16:00, 21:00")
+    return scheduler
+
+
+def configure_telegram_webhook():
+    public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+    if not (TELEGRAM_TOKEN and TELEGRAM_WEBHOOK_SECRET and public_domain):
+        log.warning("Telegram webhook not configured: token, secret, or public domain missing")
+        return
+    try:
+        telegram_call("setWebhook", {
+            "url": f"https://{public_domain}/telegram/webhook",
+            "secret_token": TELEGRAM_WEBHOOK_SECRET,
+            "allowed_updates": ["message", "callback_query"],
+            "drop_pending_updates": False
+        })
+        log.info("Telegram webhook configured")
+    except Exception:
+        log.exception("Could not configure Telegram webhook")
+
+
 def create_draft():
     body, data = make_report()
-    draft_id = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    with draft_lock:
-        DRAFTS[draft_id] = {"text": body, "data": data, "created": datetime.now(timezone.utc).isoformat()}
+    draft_id = uuid.uuid4().hex[:16]
+    created_at = datetime.now(timezone.utc).isoformat()
+    with draft_db() as connection:
+        connection.execute(
+            "INSERT INTO drafts (draft_id, body, data_json, created_at, status) VALUES (?, ?, ?, ?, 'pending')",
+            (draft_id, body, json.dumps(data, ensure_ascii=False), created_at)
+        )
     return draft_id, body
 
 
@@ -212,19 +310,16 @@ def telegram_callback():
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "دسترسی غیرمجاز"})
             return jsonify({"ok": True})
         action, _, draft_id = data.partition(":")
-        with draft_lock:
-            draft = DRAFTS.get(draft_id)
+        draft = get_draft(draft_id)
         if not draft:
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "پیش‌نویس منقضی یا ناموجود است"})
         elif action == "approve":
             send_telegram("گزارش تأییدشده\n\n" + draft["text"])
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "گزارش منتشر شد"})
-            with draft_lock:
-                DRAFTS.pop(draft_id, None)
+            delete_draft(draft_id)
         elif action == "reject":
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "گزارش رد شد"})
-            with draft_lock:
-                DRAFTS.pop(draft_id, None)
+            delete_draft(draft_id)
     except Exception:
         log.exception("Callback processing failed")
         if callback_id:
@@ -233,6 +328,11 @@ def telegram_callback():
             except Exception:
                 pass
     return jsonify({"ok": True})
+
+
+# Railway runs a single Gunicorn worker for this service; enable jobs explicitly in production.
+scheduler = start_scheduler()
+configure_telegram_webhook()
 
 
 if __name__ == "__main__":
