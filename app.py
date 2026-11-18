@@ -48,6 +48,7 @@ PREMIUM_DURATION_DAYS = int(os.getenv("PREMIUM_DURATION_DAYS", "30"))
 AI_DAILY_REQUEST_LIMIT = max(0, int(os.getenv("AI_DAILY_REQUEST_LIMIT", "12")))
 STARS_PREMIUM_PRICE = max(0, int(os.getenv("STARS_PREMIUM_PRICE", "0")))
 STARS_IDEA_PRICE = max(0, int(os.getenv("STARS_IDEA_PRICE", "0")))
+STARS_FUNPACK_PRICE = max(0, int(os.getenv("STARS_FUNPACK_PRICE", "0")))
 WALLET_BOT_USERNAME = os.getenv("TELEGRAM_WALLET_BOT_USERNAME", "EhsanWallet_bot").strip().lstrip("@")
 SUPPORT_BTC_ADDRESS = os.getenv("SUPPORT_BTC_ADDRESS", "")
 SUPPORT_BCH_ADDRESS = os.getenv("SUPPORT_BCH_ADDRESS", "")
@@ -71,6 +72,20 @@ JOKES = [
     "به ربات گفتم آینده را پیش‌بینی کن؛ گفت: اول لطفاً داده‌های گذشته را دست‌کاری نکن!",
 ]
 ACTIVE_QUIZZES = {}
+FUN_PACK_TEXT = (
+    "بسته سرگرمی ویژه شما\n\n"
+    "۱) کدام سیاره به سیاره سرخ معروف است؟ پاسخ: مریخ\n"
+    "۲) عدد بعدی دنباله ۲، ۴، ۸، ۱۶ چیست؟ پاسخ: ۳۲\n"
+    "۳) پایتخت ژاپن کدام شهر است؟ پاسخ: توکیو\n"
+    "۴) اگر ۵ دستگاه در ۵ دقیقه ۵ قطعه بسازند، ۱۰۰ دستگاه در ۵ دقیقه چند قطعه می‌سازند؟ پاسخ: ۱۰۰\n"
+    "۵) کدام گاز بیشترین سهم را در جو زمین دارد؟ پاسخ: نیتروژن\n"
+    "۶) چه چیزی هرچه بیشتر از آن برداری بزرگ‌تر می‌شود؟ پاسخ: چاله\n"
+    "۷) کدام عدد هم بر ۲ و هم بر ۳ بخش‌پذیر است: ۱۴، ۱۸ یا ۲۵؟ پاسخ: ۱۸\n"
+    "۸) کوچک‌ترین عدد اول چیست؟ پاسخ: ۲\n"
+    "۹) کدام اقیانوس بزرگ‌ترین است؟ پاسخ: آرام\n"
+    "۱۰) اگر امروز دوشنبه باشد، ۱۰۰ روز بعد چه روزی است؟ پاسخ: چهارشنبه\n\n"
+    "این بسته برای سرگرمی و یادگیری عمومی است؛ پاسخ‌ها داخل هر سؤال آمده‌اند."
+)
 
 
 def binance_get(path, params=None):
@@ -390,7 +405,12 @@ def stars_product(product_code):
             "title": "ایده کسب‌وکار اختصاصی با هوش مصنوعی",
             "description": "یک ایده کاربردی همراه با مشتری هدف، هزینه شروع و روش اعتبارسنجی",
             "price": STARS_IDEA_PRICE,
+        },        "fun_pack": {
+            "title": "بسته سرگرمی و معمای ویژه",
+            "description": "۱۰ سؤال دانستنی و معمای منطقی همراه با پاسخ",
+            "price": STARS_FUNPACK_PRICE,
         },
+
     }
     product = products.get(product_code)
     return product if product and 1 <= product["price"] <= 25000 else None
@@ -746,6 +766,11 @@ def telegram_webhook():
                 "chat_id": chat_id,
                 "text": f"پرداخت موفق بود؛ اشتراک پریمیوم شما برای {PREMIUM_DURATION_DAYS} روز فعال شد."
             })
+        elif product_code == "fun_pack":
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": telegram_safe_text(FUN_PACK_TEXT)
+            })
         elif product_code == "business_idea":
             idea = openai_text(
                 "یک ایده کسب‌وکار دیجیتال کم‌هزینه و قانونی برای شروع در ایران پیشنهاد بده. "
@@ -784,6 +809,7 @@ def telegram_webhook():
                     "/riddle معما\n/joke سرگرمی\n"
                     "/plans پلن‌ها\n/premium خرید پریمیوم با Stars\n"
                     "/businessidea خرید ایده اختصاصی با Stars\n"
+                    "/funpack بسته سرگرمی پولی با Stars\n"
                     "/support آدرس حمایت اختیاری\n/wallet ورود به ربات کیف پول\n"
                     "/paysupport پشتیبانی پرداخت\n"
                     "/draft ساخت پیش‌نویس (مدیر)\n/status وضعیت سرویس (مدیر)\n"
@@ -798,7 +824,7 @@ def telegram_webhook():
                     "بازار: /price BTC | /whales | /ask\n"
                     "کسب‌وکار: /idea | /businessidea\n"
                     "سرگرمی: /quiz | /answer B | /riddle | /joke\n"
-                    "اشتراک و پرداخت: /plans | /premium | /support | /wallet | /paysupport"
+                    "اشتراک و پرداخت: /plans | /premium | /businessidea | /funpack | /support | /wallet | /paysupport"
                 )
             })
         elif command == "/joke":
@@ -858,6 +884,12 @@ def telegram_webhook():
                     "chat_id": chat_id,
                     "text": "خرید پریمیوم هنوز فعال نشده است؛ مدیر باید قیمت Telegram Stars را در Railway تنظیم کند."
                 })
+        elif command == "/funpack":
+            if not send_stars_invoice(chat_id, user_id, "fun_pack"):
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "بسته سرگرمی پولی فعلاً خاموش است؛ مدیر باید قیمت Telegram Stars را در Railway تنظیم کند."
+                })
         elif command == "/businessidea":
             if not send_stars_invoice(chat_id, user_id, "business_idea"):
                 telegram_call("sendMessage", {
@@ -898,6 +930,10 @@ def telegram_webhook():
                 f"\nایده کسب‌وکار اختصاصی: {STARS_IDEA_PRICE} Stars"
                 if stars_product("business_idea")
                 else "\nایده اختصاصی: قیمت Stars هنوز تنظیم نشده است."
+            ) + (
+                f"\nبسته سرگرمی: {STARS_FUNPACK_PRICE} Stars"
+                if stars_product("fun_pack")
+                else "\nبسته سرگرمی: قیمت Stars هنوز تنظیم نشده است."
             ) + "\nخرید خدمات دیجیتال در تلگرام فقط با Telegram Stars انجام می‌شود."
             telegram_call("sendMessage", {"chat_id": chat_id, "text": status_text})
         elif command == "/pay":
@@ -979,7 +1015,7 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": "درخواست رد شد." if rejected else "درخواست قابل رد پیدا نشد."
             })
-        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/support", "/wallet", "/paysupport"):
+        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/support", "/wallet", "/paysupport"):
             return jsonify({"ok": True})
         elif command == "/draft" and admin:
             draft_id, body = create_draft()
