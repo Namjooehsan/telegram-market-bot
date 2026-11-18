@@ -1,4 +1,5 @@
 import concurrent.futures
+import hashlib
 import html
 import json
 import logging
@@ -130,6 +131,14 @@ class OpportunityResearcher:
                     first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS opportunity_ideas (
+                    idea_id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    source_urls_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
 
     def _connect(self):
         conn = sqlite3.connect(str(self.db_path), timeout=20)
@@ -241,6 +250,36 @@ class OpportunityResearcher:
                 FROM opportunity_signals ORDER BY score DESC,published_at DESC LIMIT ?
             """, (limit,)).fetchall()
         return [dict(row) for row in rows]
+
+    def save_ai_ideas(self, content, source_urls=None):
+        content = str(content or "").strip()[:8000]
+        if not content:
+            return False
+        source_urls = [str(url)[:500] for url in (source_urls or []) if str(url).startswith(("https://", "http://"))][:10]
+        idea_id = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        created_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute("""
+                INSERT OR IGNORE INTO opportunity_ideas
+                (idea_id, content, source_urls_json, created_at)
+                VALUES (?, ?, ?, ?)
+            """, (idea_id, content, json.dumps(source_urls, ensure_ascii=False), created_at))
+        return cursor.rowcount == 1
+
+    def latest_ai_ideas(self, limit=3):
+        limit = min(10, max(1, int(limit)))
+        with self._connect() as conn:
+            rows = conn.execute("""
+                SELECT idea_id, content, source_urls_json, created_at
+                FROM opportunity_ideas
+                ORDER BY created_at DESC LIMIT ?
+            """, (limit,)).fetchall()
+        return [{
+            "idea_id": row["idea_id"],
+            "content": row["content"],
+            "source_urls": json.loads(row["source_urls_json"]),
+            "created_at": row["created_at"],
+        } for row in rows]
 
     def _run_queries(self, query_jobs):
         raw, errors = [], []

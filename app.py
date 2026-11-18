@@ -695,7 +695,10 @@ def generate_opportunity_ideas(signals):
         "customer validation. Exclude fraud, gambling, weapons, drugs, cyber abuse, privacy invasion, "
         "counterfeit goods, sanctions evasion, and unlicensed professional services."
     )
-    return openai_text(prompt, system_prompt, max_output_tokens=1400)
+    generated = openai_text(prompt, system_prompt, max_output_tokens=1400)
+    if generated:
+        OPPORTUNITY_RESEARCHER.save_ai_ideas(generated, [item.get("url", "") for item in compact])
+    return generated
 
 
 def scheduled_opportunity_refresh():
@@ -1205,6 +1208,12 @@ def telegram_webhook():
                 "هنوز سیگنال تازه‌ای ذخیره نشده است. مدیر می‌تواند /refreshideas را اجرا کند؛ "
                 "پایش روزانه نیز در ساعت ۰۷:۱۵ تهران تنظیم شده است."
             )
+            saved_ideas = OPPORTUNITY_RESEARCHER.latest_ai_ideas(1)
+            if saved_ideas:
+                reply += (
+                    "\n\nآخرین ایده هوش مصنوعی ذخیره‌شده (برای اعتبارسنجی):\n"
+                    + saved_ideas[0]["content"]
+                )
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": telegram_safe_text(reply[:3900]),
                 "disable_web_page_preview": True

@@ -37,3 +37,15 @@ def test_refresh_persists_and_deduplicates_public_signals(tmp_path, monkeypatch)
     assert first["new_count"] == 1
     assert second["new_count"] == 0
     assert len(researcher.latest_signals(5)) == 1
+
+
+def test_ai_ideas_are_persisted_and_deduplicated(tmp_path):
+    researcher = OpportunityResearcher(tmp_path / "research.sqlite3")
+    idea_text = "ایده آزمایشی: ابزار خودکارسازی پاسخ مشتری برای فروشگاه‌های کوچک"
+    sources = ["https://example.com/source"]
+    assert researcher.save_ai_ideas(idea_text, sources) is True
+    assert researcher.save_ai_ideas(idea_text, sources) is False
+    saved = researcher.latest_ai_ideas(2)
+    assert len(saved) == 1
+    assert saved[0]["content"] == idea_text
+    assert saved[0]["source_urls"] == sources
