@@ -192,3 +192,11 @@ def test_support_wallets_show_xrp_destination_tag(monkeypatch):
     assert "rTestAddress" in support_text
     assert "123456" in support_text
     assert "حمایت اختیاری" in support_text
+
+
+def test_fun_pack_requires_configured_stars_price(monkeypatch):
+    monkeypatch.setattr(market_app, "STARS_FUNPACK_PRICE", 0)
+    assert market_app.stars_product("fun_pack") is None
+    monkeypatch.setattr(market_app, "STARS_FUNPACK_PRICE", 45)
+    product = market_app.stars_product("fun_pack")
+    assert product["price"] == 45
