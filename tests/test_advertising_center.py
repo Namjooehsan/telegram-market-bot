@@ -43,9 +43,11 @@ def test_approval_and_publish_idempotency(tmp_path):
     campaign = center.ensure_default_campaign()
     creative_id, _ = center.create_daily_creative(campaign, "approved copy")
     assert center.review_creative(creative_id, True)["status"] == "approved"
-    assert center.review_creative(creative_id, True) is None
+    # Repeated approval is safe and supports retrying only failed destinations.
+    assert center.review_creative(creative_id, True)["status"] == "approved"
     assert center.mark_published(creative_id, [{"destination": "-1001", "status": "sent", "message_id": 123}])
     assert center.get_creative(creative_id)["status"] == "published"
+    assert center.delivered_destinations(creative_id) == {"-1001"}
     assert not center.mark_published(creative_id, [{"destination": "-1001", "status": "sent"}])
 
 
