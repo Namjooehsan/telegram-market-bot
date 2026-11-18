@@ -4,7 +4,7 @@ import logging
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -31,6 +31,18 @@ TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", TELEGRAM_
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 ADMIN_IDS = {x.strip() for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if x.strip()}
 BINANCE_BASE = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+TRACKED_SYMBOLS = [x.strip().upper() for x in os.getenv(
+    "TRACKED_SYMBOLS", "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT"
+).split(",") if x.strip()]
+PAYMENTS_ENABLED = os.getenv("PAYMENTS_ENABLED", "false").lower() == "true"
+PAYMENT_ASSET = os.getenv("PAYMENT_ASSET", "")
+PAYMENT_NETWORK = os.getenv("PAYMENT_NETWORK", "")
+PAYMENT_RECEIVE_ADDRESS = os.getenv("PAYMENT_RECEIVE_ADDRESS", "")
+PREMIUM_PRICE = os.getenv("PREMIUM_PRICE", "")
+PREMIUM_DURATION_DAYS = int(os.getenv("PREMIUM_DURATION_DAYS", "30"))
 
 
 def binance_get(path, params=None):
@@ -47,6 +59,9 @@ def market_snapshot(symbol="BTCUSDT"):
     last = closes[-1]
     sma20 = sum(closes[-20:]) / min(20, len(closes))
     change = float(ticker["priceChangePercent"])
+    baseline_volumes = volumes[-25:-1]
+    baseline_volume = sum(baseline_volumes) / len(baseline_volumes) if baseline_volumes else 0.0
+    volume_spike_ratio = volumes[-1] / baseline_volume if baseline_volume else 0.0
     return {
         "symbol": symbol,
         "price": float(ticker["lastPrice"]),
@@ -54,6 +69,9 @@ def market_snapshot(symbol="BTCUSDT"):
         "volume_24h_base": float(ticker["volume"]),
         "quote_volume_24h": float(ticker["quoteVolume"]),
         "hourly_volume_latest": volumes[-1],
+        "hourly_volume_avg_previous_24": baseline_volume,
+        "volume_spike_ratio": volume_spike_ratio,
+        "volume_signal": "جهش حجم؛ نیازمند بررسی" if volume_spike_ratio >= 2.5 else "عادی",
         "sma20_1h": sma20,
         "trend_1h": "بالای میانگین ۲۰ ساعته" if last >= sma20 else "پایین میانگین ۲۰ ساعته",
         "candles": [{"time": int(c[0]), "open": float(c[1]), "high": float(c[2]),
@@ -64,8 +82,94 @@ def market_snapshot(symbol="BTCUSDT"):
     }
 
 
+def openai_text(prompt, system_prompt, max_output_tokens=650):
+    """Call the OpenAI Responses API; skip cleanly until a private key is configured."""
+    if not OPENAI_API_KEY:
+        return None
+    try:
+        response = requests.post(
+            f"{OPENAI_BASE_URL}/responses",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": OPENAI_MODEL,
+                "store": False,
+                "max_output_tokens": max_output_tokens,
+                "input": [
+                    {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+                    {"role": "user", "content": [{"type": "input_text", "text": prompt}]}
+                ]
+            },
+            timeout=45
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("output_text"):
+            return payload["output_text"].strip()
+        chunks = []
+        for item in payload.get("output", []):
+            for part in item.get("content", []):
+                if part.get("type") == "output_text" and part.get("text"):
+                    chunks.append(part["text"])
+        return "\n".join(chunks).strip() or None
+    except Exception:
+        log.exception("OpenAI analysis request failed")
+        return None
+
+
+def ai_market_commentary(rows):
+    concise_rows = [{
+        "symbol": row["symbol"],
+        "price_usd": row["price"],
+        "change_24h_pct": row["change_24h_pct"],
+        "quote_volume_24h_usd": row["quote_volume_24h"],
+        "trend_1h": row["trend_1h"],
+        "volume_spike_ratio": round(row["volume_spike_ratio"], 2)
+    } for row in rows]
+    system_prompt = (
+        "You are a cautious Persian-language digital-asset market analyst. "
+        "Use only the supplied live snapshot. Never invent news, on-chain flows, order-book data, "
+        "buy/sell volume, whale identities, or support/resistance levels not present in the data. "
+        "Explain uncertainty. Do not give personalized financial advice or guaranteed predictions. "
+        "Write concise, practical Persian in 4-6 bullets."
+    )
+    prompt = (
+        "بر اساس داده‌های زیر جمع‌بندی کوتاه تهیه کن: وضعیت کلی، قدرت نسبی دارایی‌ها، "
+        "ریسک‌ها و داده‌های لازم برای تأیید سیگنال. جهش حجم به‌تنهایی اثبات ورود نهنگ نیست. "
+        "داده‌ها:\n" + json.dumps(concise_rows, ensure_ascii=False)
+    )
+    return openai_text(prompt, system_prompt, max_output_tokens=650)
+
+
+def ai_answer(question):
+    snapshots = []
+    for symbol in TRACKED_SYMBOLS[:8]:
+        try:
+            snapshots.append(market_snapshot(symbol))
+        except Exception as exc:
+            log.warning("Could not refresh %s for AI question: %s", symbol, exc)
+    if not snapshots:
+        return "فعلاً دریافت داده زنده بازار ممکن نشد؛ کمی بعد دوباره امتحان کن."
+    compact = [{
+        "symbol": row["symbol"], "price": row["price"],
+        "change_24h_pct": row["change_24h_pct"],
+        "quote_volume_24h": row["quote_volume_24h"],
+        "trend_1h": row["trend_1h"],
+        "volume_spike_ratio": round(row["volume_spike_ratio"], 2)
+    } for row in snapshots]
+    return openai_text(
+        "پرسش کاربر: " + question + "\n\nداده زنده بازار (JSON): " +
+        json.dumps(compact, ensure_ascii=False),
+        "به فارسی پاسخ بده. پاسخ باید مبتنی بر داده ارسالی باشد، کمبود داده را صریح بگو، "
+        "میان واقعیت و برداشت تحلیلی تفکیک کن، خبر یا قیمت ساختگی نده و توصیه قطعی خرید/فروش نکن.",
+        max_output_tokens=700
+    )
+
+
 def make_report():
-    symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"]
+    symbols = TRACKED_SYMBOLS
     rows = []
     for symbol in symbols:
         try:
@@ -80,10 +184,20 @@ def make_report():
             f'{row["symbol"]}: {row["price"]:,.4f} USDT | '
             f'تغییر ۲۴ساعته: {row["change_24h_pct"]:+.2f}% | '
             f'حجم مظنه ۲۴ساعته: {row["quote_volume_24h"]:,.0f} USDT | '
-            f'وضعیت: {row["trend_1h"]}'
+            f'وضعیت: {row["trend_1h"]} | '
+            f'نسبت حجم یک‌ساعته به میانگین ۲۴ ساعت قبل: {row["volume_spike_ratio"]:.2f}x'
         )
-    lines += ["", "این گزارش اطلاعاتی است و توصیه قطعی خرید یا فروش نیست.",
-              "حجم خرید و فروش تفکیک‌شده از داده عمومی تیکر قابل استنتاج قطعی نیست."]
+    ai_notes = ai_market_commentary(rows)
+    if ai_notes:
+        lines += ["", "تحلیل هوش مصنوعی:", ai_notes]
+    else:
+        lines += ["", "تحلیل هوش مصنوعی پس از ثبت کلید API فعال می‌شود."]
+    lines += [
+        "",
+        "جهش حجم فقط هشدار آماری است و فعالیت نهنگ را ثابت نمی‌کند.",
+        "حجم خرید و فروش تفکیک‌شده از تیکر عمومی قابل استنتاج قطعی نیست.",
+        "این گزارش اطلاعاتی است و توصیه قطعی خرید یا فروش نیست."
+    ]
     return "\n".join(lines), rows
 
 
@@ -137,6 +251,27 @@ def draft_db():
             status TEXT NOT NULL DEFAULT 'pending'
         )
     """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS premium_members (
+            user_id TEXT PRIMARY KEY,
+            expires_at TEXT NOT NULL,
+            granted_at TEXT NOT NULL
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS payment_requests (
+            invoice_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            network TEXT NOT NULL,
+            amount TEXT NOT NULL,
+            address TEXT NOT NULL,
+            tx_hash TEXT,
+            status TEXT NOT NULL DEFAULT 'awaiting_tx',
+            created_at TEXT NOT NULL,
+            reviewed_at TEXT
+        )
+    """)
     return connection
 
 
@@ -154,6 +289,100 @@ def get_draft(draft_id):
 def delete_draft(draft_id):
     with draft_db() as connection:
         connection.execute("DELETE FROM drafts WHERE draft_id = ?", (draft_id,))
+
+
+def payment_setup_ready():
+    return bool(
+        PAYMENTS_ENABLED and PAYMENT_ASSET and PAYMENT_NETWORK
+        and PAYMENT_RECEIVE_ADDRESS and PREMIUM_PRICE
+    )
+
+
+def is_premium_user(user_id):
+    if is_admin(user_id):
+        return True
+    with draft_db() as connection:
+        row = connection.execute(
+            "SELECT expires_at FROM premium_members WHERE user_id = ?",
+            (str(user_id),)
+        ).fetchone()
+    return bool(row and row[0] > datetime.now(timezone.utc).isoformat())
+
+
+def create_payment_invoice(user_id):
+    if not payment_setup_ready():
+        return None
+    invoice_id = "P" + uuid.uuid4().hex[:10].upper()
+    created_at = datetime.now(timezone.utc).isoformat()
+    with draft_db() as connection:
+        connection.execute(
+            """INSERT INTO payment_requests
+            (invoice_id, user_id, asset, network, amount, address, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (invoice_id, str(user_id), PAYMENT_ASSET, PAYMENT_NETWORK,
+             PREMIUM_PRICE, PAYMENT_RECEIVE_ADDRESS, created_at)
+        )
+    return invoice_id
+
+
+def submit_payment(invoice_id, user_id, tx_hash):
+    with draft_db() as connection:
+        cursor = connection.execute(
+            """UPDATE payment_requests SET tx_hash = ?, status = 'submitted'
+            WHERE invoice_id = ? AND user_id = ? AND status = 'awaiting_tx'""",
+            (tx_hash[:180], invoice_id.upper(), str(user_id))
+        )
+        return cursor.rowcount == 1
+
+
+def pending_payments(limit=10):
+    with draft_db() as connection:
+        return connection.execute(
+            """SELECT invoice_id, user_id, asset, network, amount, tx_hash
+            FROM payment_requests WHERE status = 'submitted'
+            ORDER BY created_at ASC LIMIT ?""",
+            (limit,)
+        ).fetchall()
+
+
+def approve_payment(invoice_id):
+    now = datetime.now(timezone.utc)
+    with draft_db() as connection:
+        row = connection.execute(
+            "SELECT user_id, status FROM payment_requests WHERE invoice_id = ?",
+            (invoice_id.upper(),)
+        ).fetchone()
+        if not row or row[1] != "submitted":
+            return None
+        user_id = row[0]
+        current = connection.execute(
+            "SELECT expires_at FROM premium_members WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+        base = datetime.fromisoformat(current[0]) if current and datetime.fromisoformat(current[0]) > now else now
+        expires_at = (base + timedelta(days=PREMIUM_DURATION_DAYS)).isoformat()
+        connection.execute(
+            """INSERT INTO premium_members (user_id, expires_at, granted_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET expires_at = excluded.expires_at,
+                granted_at = excluded.granted_at""",
+            (user_id, expires_at, now.isoformat())
+        )
+        connection.execute(
+            "UPDATE payment_requests SET status = 'approved', reviewed_at = ? WHERE invoice_id = ?",
+            (now.isoformat(), invoice_id.upper())
+        )
+    return user_id, expires_at
+
+
+def reject_payment(invoice_id):
+    with draft_db() as connection:
+        cursor = connection.execute(
+            """UPDATE payment_requests SET status = 'rejected', reviewed_at = ?
+            WHERE invoice_id = ? AND status = 'submitted'""",
+            (datetime.now(timezone.utc).isoformat(), invoice_id.upper())
+        )
+        return cursor.rowcount == 1
 
 
 def scheduled_draft():
@@ -274,11 +503,138 @@ def telegram_webhook():
     user = message.get("from") or {}
     user_id = user.get("id")
     chat_id = str((message.get("chat") or {}).get("id", ""))
-    command = (message.get("text") or "").strip().split()[0].lower() if message.get("text") else ""
-    if not is_admin(user_id):
-        return jsonify({"ok": True})
+    raw_text = (message.get("text") or "").strip()
+    parts = raw_text.split(maxsplit=1)
+    command = parts[0].split("@", 1)[0].lower() if parts else ""
+    argument = parts[1].strip() if len(parts) > 1 else ""
+    admin = is_admin(user_id)
     try:
-        if command == "/draft":
+        if command in ("/start", "/help"):
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": (
+                    "ربات پایش بازار رمزارز\n"
+                    "/plans پلن‌ها\n/pay فاکتور اشتراک (پس از فعال‌سازی پرداخت)\n"
+                    "/paid شناسه‌فاکتور هش‌تراکنش\n"
+                    "/ask پرسش تحلیلی ویژه مدیر و اعضای پریمیوم\n"
+                    "/whales بررسی جهش‌های حجم\n"
+                    "/draft ساخت پیش‌نویس (مدیر)\n/status وضعیت سرویس (مدیر)\n"
+                    "انتشار فقط پس از تأیید مدیر انجام می‌شود."
+                )
+            })
+        elif command == "/plans":
+            status_text = (
+                f"پلن پریمیوم: {PREMIUM_DURATION_DAYS} روز | مبلغ: {PREMIUM_PRICE} {PAYMENT_ASSET}"
+                if payment_setup_ready()
+                else "پلن پریمیوم در حال آماده‌سازی است؛ پرداخت هنوز فعال نشده است."
+            )
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": status_text})
+        elif command == "/pay":
+            invoice_id = create_payment_invoice(user_id)
+            if not invoice_id:
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "پرداخت هنوز فعال نشده است. تا تعیین دارایی، شبکه، مبلغ و آدرس دریافت، واریز انجام نده."
+                })
+            else:
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": (
+                        f"فاکتور: {invoice_id}\nمبلغ: {PREMIUM_PRICE} {PAYMENT_ASSET}\n"
+                        f"شبکه: {PAYMENT_NETWORK}\nآدرس دریافت: {PAYMENT_RECEIVE_ADDRESS}\n"
+                        "پس از انتقال دستور زیر را بفرست:\n"
+                        f"/paid {invoice_id} TXID"
+                    )
+                })
+        elif command == "/paid":
+            fields = argument.split(maxsplit=1)
+            if len(fields) != 2 or len(fields[1]) < 12:
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id, "text": "فرمت درست: /paid شناسه‌فاکتور هش‌تراکنش"
+                })
+            elif submit_payment(fields[0], user_id, fields[1]):
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "درخواست ثبت شد؛ پس از بررسی دستی تراکنش توسط مدیر، اشتراک فعال می‌شود."
+                })
+                for admin_id in ADMIN_IDS:
+                    telegram_call("sendMessage", {
+                        "chat_id": admin_id,
+                        "text": f"پرداخت برای بررسی: {fields[0]}\nکاربر: {user_id}\nTXID: {fields[1]}"
+                    })
+            else:
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id, "text": "فاکتور معتبر و در انتظار پرداخت برای این حساب پیدا نشد."
+                })
+        elif command == "/ask":
+            if not is_premium_user(user_id):
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "تحلیل تعاملی ویژه مدیر و اعضای پریمیوم است. برای اطلاعات پلن /plans را بفرست."
+                })
+            elif not OPENAI_API_KEY:
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id, "text": "کلید سرویس هوش مصنوعی هنوز روی سرور ثبت نشده است."
+                })
+            elif not argument:
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id, "text": "نمونه: /ask وضعیت بیت‌کوین چیست؟"
+                })
+            else:
+                answer = ai_answer(argument) or "پاسخ هوش مصنوعی فعلاً در دسترس نیست."
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id, "text": answer[:3900], "disable_web_page_preview": True
+                })
+        elif command == "/whales":
+            signals = []
+            for symbol in TRACKED_SYMBOLS[:8]:
+                try:
+                    row = market_snapshot(symbol)
+                    if row["volume_spike_ratio"] >= 2.0:
+                        signals.append(
+                            f'{symbol}: حجم یک‌ساعته {row["volume_spike_ratio"]:.2f} برابر میانگین ۲۴ ساعت قبل'
+                        )
+                except Exception as exc:
+                    log.warning("Volume scan failed for %s: %s", symbol, exc)
+            body = "\n".join(signals) if signals else "جهش حجم بالاتر از آستانه ۲ برابر مشاهده نشد."
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": "هشدار جهش حجم (نه اثبات فعالیت نهنگ):\n" + body
+            })
+        elif command == "/status" and admin:
+            schedule = "فعال" if scheduler and scheduler.running else "غیرفعال"
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": (
+                    f"سرویس: فعال\nهوش مصنوعی: {'کلید ثبت شده' if OPENAI_API_KEY else 'منتظر کلید'}"
+                    f"\nمدل: {OPENAI_MODEL}\nزمان‌بندی تهران: {schedule}"
+                    f"\nپرداخت: {'آماده تنظیم' if payment_setup_ready() else 'غیرفعال'}"
+                    f"\nدارایی‌های تحت پایش: {', '.join(TRACKED_SYMBOLS)}"
+                    f"\nمقصدهای انتشار: {len(TELEGRAM_CHAT_IDS)}"
+                )
+            })
+        elif command == "/payments" and admin:
+            rows = pending_payments()
+            body = "\n".join(
+                f"{row[0]} | user={row[1]} | {row[4]} {row[2]} / {row[3]} | TXID={row[5]}"
+                for row in rows
+            ) or "پرداخت در انتظار بررسی وجود ندارد."
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": body[:3900]})
+        elif command == "/approvepay" and admin:
+            approved = approve_payment(argument)
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": f"اشتراک کاربر {approved[0]} تا {approved[1]} فعال شد."
+                if approved else "فاکتور در وضعیت قابل تأیید نیست."
+            })
+        elif command == "/rejectpay" and admin:
+            rejected = reject_payment(argument)
+            telegram_call("sendMessage", {
+                "chat_id": chat_id, "text": "درخواست رد شد." if rejected else "درخواست قابل رد پیدا نشد."
+            })
+        elif not admin and command not in ("/start", "/help", "/plans", "/pay", "/paid", "/ask", "/whales"):
+            return jsonify({"ok": True})
+        elif command == "/draft" and admin:
             draft_id, body = create_draft()
             keyboard = {"inline_keyboard": [[
                 {"text": "تأیید و انتشار", "callback_data": f"approve:{draft_id}"},
@@ -286,9 +642,6 @@ def telegram_webhook():
             ]]}
             telegram_call("sendMessage", {"chat_id": chat_id, "text": f"پیش‌نویس {draft_id}\n\n{body}",
                                            "reply_markup": keyboard})
-        elif command == "/help":
-            telegram_call("sendMessage", {"chat_id": chat_id,
-                "text": "دستورها:\n/draft ساخت پیش‌نویس گزارش\n/help راهنما\n\nانتشار فقط پس از تأیید مدیر انجام می‌شود."})
     except Exception:
         log.exception("Telegram command failed")
     return jsonify({"ok": True})
