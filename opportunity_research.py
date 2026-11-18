@@ -258,30 +258,23 @@ class OpportunityResearcher:
             if signal and signal["url"] not in seen:
                 seen.add(signal["url"])
                 signals.append(signal)
-        if signals:
-            self._save(signals)
-        return raw, signals, errors
+        new_count = self._save(signals) if signals else 0
+        return raw, signals, errors, new_count
 
     def refresh(self):
         jobs = [("Google News", q, self._fetch_google_news) for q in SEARCH_QUERIES]
         jobs += [("Hacker News", q, self._fetch_hacker_news) for q in HN_QUERIES]
-        raw, signals, errors = self._run_queries(jobs)
-        # A current deduplicated feed is returned, including older useful results from the cache.
+        raw, signals, errors, new_count = self._run_queries(jobs)
         return {
-            "fetched": len(raw), "new_count": self._save_new_count_placeholder(signals),
+            "fetched": len(raw), "new_count": new_count,
             "errors": errors[:12], "signals": self.latest_signals(12),
         }
-
-    def _save_new_count_placeholder(self, signals):
-        # _run_queries already persisted the results; report the number currently surfaced.
-        # The daily notifier uses this as a useful-change count, not as a billing or revenue metric.
-        return len(signals)
 
     def search_custom(self, query, limit=6):
         query = re.sub(r"[\x00-\x1f]", " ", str(query or "")).strip()
         if not query or len(query) > 120:
             return []
-        raw, signals, _ = self._run_queries([
+        raw, signals, _, _ = self._run_queries([
             ("Google News", query, self._fetch_google_news),
             ("Hacker News", query, self._fetch_hacker_news),
         ])

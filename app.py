@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import requests
+from opportunity_research import OpportunityResearcher, get_market_universe, format_market_universe, format_opportunity_digest
 from flask import Flask, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -25,6 +26,8 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 limiter = Limiter(get_remote_address, app=app, default_limits=["120 per hour"])
 DRAFT_DB_PATH = os.getenv("DRAFT_DB_PATH", "./data/drafts.sqlite3")
+OPPORTUNITY_RESEARCHER = OpportunityResearcher(DRAFT_DB_PATH)
+WHALE_TRACKER_API_URL = os.getenv("WHALE_TRACKER_API_URL", "https://whale-tracker-production-1a5d75ec.up.railway.app").rstrip("/")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -646,6 +649,43 @@ def ideas_catalog_text():
     )
 
 
+
+def whale_tracker_get(path):
+    """Read public status and alerts from the separate whale service."""
+    if not WHALE_TRACKER_API_URL:
+        raise RuntimeError("Whale tracker URL is not configured")
+    response = requests.get(f"{WHALE_TRACKER_API_URL}{path}", timeout=10)
+    response.raise_for_status()
+    return response.json()
+
+
+def scheduled_opportunity_refresh():
+    """Collect public signals daily and privately notify admins about genuinely new records."""
+    try:
+        result = OPPORTUNITY_RESEARCHER.refresh()
+        log.info(
+            "Opportunity research finished: fetched=%s new=%s errors=%s",
+            result.get("fetched", 0), result.get("new_count", 0), len(result.get("errors", []))
+        )
+        if result.get("new_count", 0) <= 0:
+            return
+        message = (
+            "گزارش خودکار فرصت‌های درآمدی تازه\n"
+            f"خبر/سیگنال بررسی‌شده: {result.get('fetched', 0)} | مورد جدید ذخیره‌شده: {result.get('new_count', 0)}\n\n"
+            + format_opportunity_digest(result.get("signals", [])[:5])
+        )
+        for admin_id in ADMIN_IDS:
+            try:
+                telegram_call("sendMessage", {
+                    "chat_id": admin_id, "text": telegram_safe_text(message[:3900]),
+                    "disable_web_page_preview": True
+                })
+            except Exception:
+                log.exception("Could not send opportunity digest to an admin")
+    except Exception:
+        log.exception("Scheduled opportunity research failed")
+
+
 def support_wallet_text():
     lines = ["آدرس‌های حمایت اختیاری (بدون فعال‌سازی اشتراک یا خدمت دیجیتال):"]
     if SUPPORT_BTC_ADDRESS:
@@ -790,6 +830,25 @@ def start_scheduler():
             max_instances=1,
             misfire_grace_time=3600
         )
+    if os.getenv("ENABLE_OPPORTUNITY_RESEARCH", "true").lower() == "true":
+        scheduler.add_job(
+            scheduled_opportunity_refresh,
+            "cron",
+            hour=7,
+            minute=15,
+            id="opportunity-research-daily",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=3600
+        )
+        scheduler.add_job(
+            scheduled_opportunity_refresh,
+            "date",
+            run_date=datetime.now(timezone.utc) + timedelta(seconds=45),
+            id="opportunity-research-initial",
+            replace_existing=True
+        )
     scheduler.add_job(
         configure_telegram_webhook,
         "interval",
@@ -874,6 +933,17 @@ def market(symbol):
         return jsonify({"error": "Unable to build market snapshot"}), 500
 
 
+
+@app.get("/api/market-universe")
+def market_universe_api():
+    return jsonify({"markets": get_market_universe()})
+
+
+@app.get("/api/opportunities")
+def opportunities_api():
+    return jsonify({"signals": OPPORTUNITY_RESEARCHER.latest_signals(20)})
+
+
 @app.post("/telegram/webhook")
 @limiter.limit("60 per minute")
 def telegram_webhook():
@@ -946,7 +1016,7 @@ def telegram_webhook():
                     "/riddle معما\n/joke سرگرمی\n"
                     "/plans پلن‌ها\n/premium خرید پریمیوم با Stars\n"
                     "/businessidea خرید ایده اختصاصی با Stars\n"
-                    "/ideas فهرست ایده‌های دارای نشانه تقاضا\n/donate BTC 0.001 ثبت حمایت رمزارزی\n/tx شناسه TXID ارسال هش تراکنش\n"
+                    "/ideas فهرست ایده‌های دارای نشانه تقاضا\n/markets فهرست بازارهای مجاز\n/opportunities فرصت‌های درآمدی تازه\n/marketsearch عبارت جستجوی بازار\n/whalestatus وضعیت ردیاب نهنگ\n/whalealerts هشدارهای ردیاب نهنگ\n/refreshideas به‌روزرسانی پژوهش (مدیر)\n/donate BTC 0.001 ثبت حمایت رمزارزی\n/tx شناسه TXID ارسال هش تراکنش\n"
                     "/funpack بسته سرگرمی پولی با Stars\n"
                     "/support آدرس حمایت اختیاری\n/wallet ورود به ربات کیف پول\n"
                     "/paysupport پشتیبانی پرداخت\n"
@@ -960,7 +1030,8 @@ def telegram_webhook():
                 "text": (
                     "مرکز خدمات ربات\n\n"
                     "بازار: /price BTC | /whales | /ask\n"
-                    "کسب‌وکار: /idea | /ideas | /businessidea\n"
+                    "کسب‌وکار: /idea | /ideas | /markets | /opportunities | /marketsearch | /businessidea\n"
+                    "ردیاب: /whalestatus | /whalealerts\n"
                     "حمایت و پرداخت: /plans | /donate BTC 0.001 | /tx ID TXID | /support\n"
                     "سرگرمی: /quiz | /answer B | /riddle | /joke\n"
                     "اشتراک و پرداخت: /plans | /premium | /businessidea | /funpack | /support | /wallet | /paysupport"
@@ -1080,6 +1151,82 @@ def telegram_webhook():
                 "chat_id": chat_id,
                 "text": telegram_safe_text(ideas_catalog_text())
             })
+        elif command == "/markets":
+            telegram_call("sendMessage", {
+                "chat_id": chat_id, "text": telegram_safe_text(format_market_universe()),
+                "disable_web_page_preview": True
+            })
+        elif command == "/opportunities":
+            signals = OPPORTUNITY_RESEARCHER.latest_signals(6)
+            reply = format_opportunity_digest(signals) if signals else (
+                "هنوز سیگنال تازه‌ای ذخیره نشده است. مدیر می‌تواند /refreshideas را اجرا کند؛ "
+                "پایش روزانه نیز در ساعت ۰۷:۱۵ تهران تنظیم شده است."
+            )
+            telegram_call("sendMessage", {
+                "chat_id": chat_id, "text": telegram_safe_text(reply[:3900]),
+                "disable_web_page_preview": True
+            })
+        elif command == "/marketsearch":
+            if not argument or len(argument) > 120:
+                reply = "نمونه: /marketsearch AI automation یا /marketsearch خدمات کشاورزی"
+            else:
+                found = OPPORTUNITY_RESEARCHER.search_custom(argument, limit=5)
+                reply = format_opportunity_digest(found) if found else (
+                    "برای این عبارت نتیجه تازه‌ای پیدا نشد؛ عبارت کوتاه‌تر یا واژه دیگری را امتحان کن."
+                )
+            telegram_call("sendMessage", {
+                "chat_id": chat_id, "text": telegram_safe_text(reply[:3900]),
+                "disable_web_page_preview": True
+            })
+        elif command == "/refreshideas" and admin:
+            result = OPPORTUNITY_RESEARCHER.refresh()
+            reply = (
+                "به‌روزرسانی پژوهش بازار تمام شد.\n"
+                f"سیگنال‌های دریافت‌شده: {result.get('fetched', 0)} | موارد جدید: {result.get('new_count', 0)}\n"
+                f"منابع ناموفق: {len(result.get('errors', []))}\n\n"
+                + format_opportunity_digest(result.get("signals", [])[:5])
+            )
+            telegram_call("sendMessage", {
+                "chat_id": chat_id, "text": telegram_safe_text(reply[:3900]),
+                "disable_web_page_preview": True
+            })
+        elif command == "/whalestatus":
+            try:
+                data = whale_tracker_get("/api/status")
+                errors = data.get("last_scan_errors") or []
+                reply = (
+                    "وضعیت ردیاب ناهنجاری حجم\n"
+                    f"وضعیت: {data.get('status', 'نامشخص')}\n"
+                    f"نمادها: {', '.join(data.get('tracked_symbols', [])) or 'نامشخص'}\n"
+                    f"فاصله اسکن: {data.get('poll_interval_minutes', '—')} دقیقه\n"
+                    f"آخرین اسکن: {data.get('last_scan_at') or 'هنوز ثبت نشده'}\n"
+                    f"هشدارهای حافظه سرویس: {data.get('alerts_in_memory', 0)}\n"
+                    f"خطاهای آخرین اسکن: {len(errors)}"
+                )
+            except Exception as exc:
+                log.warning("Whale tracker status request failed: %s", exc)
+                reply = "فعلاً به سرویس ردیاب نهنگ دسترسی ندارم؛ وضعیت سرویس اصلی جداگانه است."
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": reply})
+        elif command == "/whalealerts":
+            try:
+                data = whale_tracker_get("/api/alerts")
+                alerts = data.get("alerts") or []
+                if not alerts:
+                    reply = "در حال حاضر هشدار ثبت‌شده‌ای در حافظه ردیاب نهنگ وجود ندارد."
+                else:
+                    lines = []
+                    for item in alerts[:8]:
+                        lines.append(
+                            f"{item.get('symbol', '—')} | قیمت {item.get('price', 0):,.6g} USDT | "
+                            f"حجم {item.get('volume_spike_ratio', 0):.2f}x | "
+                            f"حرکت کندل {item.get('latest_closed_1h_move_pct', 0):+.2f}%\n"
+                            f"{item.get('alert_created_at') or item.get('as_of') or ''}"
+                        )
+                    reply = "آخرین هشدارهای ناهنجاری حجم (نه اثبات فعالیت نهنگ):\n\n" + "\n\n".join(lines)
+            except Exception as exc:
+                log.warning("Whale tracker alerts request failed: %s", exc)
+                reply = "دریافت هشدارهای ردیاب نهنگ فعلاً ممکن نشد."
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": reply[:3900]})
         elif command == "/donate":
             donation_parts = argument.split()
             if len(donation_parts) != 2:
@@ -1225,7 +1372,7 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": "درخواست رد شد." if rejected else "درخواست قابل رد پیدا نشد."
             })
-        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/ideas", "/donate", "/tx", "/support", "/wallet", "/paysupport"):
+        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/ideas", "/markets", "/opportunities", "/marketsearch", "/whalestatus", "/whalealerts", "/donate", "/tx", "/support", "/wallet", "/paysupport"):
             return jsonify({"ok": True})
         elif command == "/draft" and admin:
             draft_id, body = create_draft()
