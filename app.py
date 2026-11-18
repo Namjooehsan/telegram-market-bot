@@ -882,7 +882,8 @@ def scheduled_draft():
 def build_advertising_copy():
     """Generate a localized campaign draft; this function never publishes."""
     configured = [x.strip().lower() for x in os.getenv(
-        "AD_LANGUAGES", "fa,en,ar,es,fr,de,ru,tr,zh,hi"
+        "AD_LANGUAGES",
+        "fa,en,ar,bn,cs,da,de,el,es,fi,fil,fr,gu,he,hi,hu,id,it,ja,jv,ko,ms,mr,nl,no,pa,pl,pt,ro,ru,sv,sw,ta,te,th,tr,uk,ur,vi,zh"
     ).split(",") if x.strip()]
     languages = [code for code in dict.fromkeys(configured) if code in LANGUAGES]
     if "fa" not in languages:
@@ -899,7 +900,7 @@ def build_advertising_copy():
             "Never invent testimonials, awards, customers, statistics, or urgency. Output plain text only.",
             "You are a careful international growth marketer and localization editor. Preserve legal caution in every language. "
             "Avoid cultural, political, religious, or financial stereotypes. Avoid false claims and prohibited products.",
-            max_output_tokens=1600
+            max_output_tokens=4200
         )
         if generated and len(generated.strip()) > 40:
             return generated.strip() + "\n\n" + (
