@@ -332,6 +332,20 @@ def draft_db():
         )
     """)
     connection.execute("""
+        CREATE TABLE IF NOT EXISTS donation_requests (
+            donation_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            network TEXT NOT NULL,
+            amount TEXT NOT NULL,
+            address TEXT NOT NULL,
+            tx_hash TEXT,
+            status TEXT NOT NULL DEFAULT 'awaiting_tx',
+            created_at TEXT NOT NULL,
+            reviewed_at TEXT
+        )
+    """)
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS ai_usage (
             usage_date TEXT PRIMARY KEY,
             request_count INTEGER NOT NULL DEFAULT 0
@@ -508,6 +522,128 @@ def complete_stars_payment(user_id, payment):
                 (str(user_id), expires_at, now.isoformat())
             )
     return row[1]
+
+
+def wallet_address_for_asset(asset):
+    asset = asset.upper()
+    wallets = {
+        "BTC": ("Bitcoin", "BTC", SUPPORT_BTC_ADDRESS),
+        "BCH": ("Bitcoin Cash", "BCH", SUPPORT_BCH_ADDRESS),
+        "XRP": ("XRP", "XRP", SUPPORT_XRP_ADDRESS),
+        "ADA": ("Cardano", "Cardano", SUPPORT_ADA_ADDRESS),
+    }
+    item = wallets.get(asset)
+    if not item or not item[2]:
+        return None
+    return item
+
+
+def create_donation_request(user_id, asset, amount):
+    asset = asset.upper()
+    wallet = wallet_address_for_asset(asset)
+    if not wallet:
+        return None
+    try:
+        numeric_amount = float(amount)
+    except (TypeError, ValueError):
+        return None
+    if not (numeric_amount > 0 and numeric_amount < 1e12):
+        return None
+    donation_id = "D" + uuid.uuid4().hex[:10].upper()
+    with draft_db() as connection:
+        connection.execute(
+            """INSERT INTO donation_requests
+            (donation_id, user_id, asset, network, amount, address, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (donation_id, str(user_id), asset, wallet[1], str(amount),
+             wallet[2], datetime.now(timezone.utc).isoformat())
+        )
+    return donation_id, wallet
+
+
+def submit_donation_tx(donation_id, user_id, tx_hash):
+    tx_hash = str(tx_hash).strip()
+    if not 16 <= len(tx_hash) <= 180:
+        return False
+    with draft_db() as connection:
+        cursor = connection.execute(
+            """UPDATE donation_requests SET tx_hash = ?, status = 'submitted'
+            WHERE donation_id = ? AND user_id = ? AND status = 'awaiting_tx'""",
+            (tx_hash, donation_id.upper(), str(user_id))
+        )
+        return cursor.rowcount == 1
+
+
+def pending_donations(limit=20):
+    with draft_db() as connection:
+        return connection.execute(
+            """SELECT donation_id, user_id, asset, network, amount, tx_hash
+            FROM donation_requests WHERE status = 'submitted'
+            ORDER BY created_at ASC LIMIT ?""",
+            (limit,)
+        ).fetchall()
+
+
+def review_donation(donation_id, approved):
+    status = "approved" if approved else "rejected"
+    with draft_db() as connection:
+        cursor = connection.execute(
+            """UPDATE donation_requests SET status = ?, reviewed_at = ?
+            WHERE donation_id = ? AND status = 'submitted'""",
+            (status, datetime.now(timezone.utc).isoformat(), donation_id.upper())
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = connection.execute(
+            "SELECT user_id, asset, amount FROM donation_requests WHERE donation_id = ?",
+            (donation_id.upper(),)
+        ).fetchone()
+    return row
+
+
+def ideas_catalog_text():
+    return (
+        "ایده‌های منتخب کسب‌وکار با نشانه‌های تقاضای بازار جهانی (۲۰۲۶)\n"
+        "این درصدها رشد جستجو/تقاضا در پلتفرم‌های گزارش‌دهنده‌اند، نه تضمین فروش یا سود در ایران.\n\n"
+        "۱) تولید و تدوین ویدئوی کوتاه با کمک AI برای فروشگاه‌ها و سازندگان محتوا\n"
+        "نشانه تقاضا: رشد ۲۷۸٪ دسته ویدئو و انیمیشن AI در Fiverr؛ تقاضای AI UGC حدود ۲۶۵٪ رشد داشته است.\n"
+        "درآمد: بسته ماهانه ۱۲ تا ۳۰ ویدئو + هزینه تدوین و اصلاح.\n"
+        "آزمایش: برای ۳ کسب‌وکار نمونه بساز و نرخ تبدیل به قرارداد را بسنج.\n\n"
+        "۲) اتوماسیون کارهای تکراری شرکت‌های کوچک با n8n و عامل‌های AI\n"
+        "نشانه تقاضا: جستجوی n8n AI automation در Fiverr حدود ۱۲۵٪ رشد؛ پاک‌سازی Excel حدود ۲۱۰٪ رشد.\n"
+        "درآمد: هزینه راه‌اندازی + پشتیبانی ماهانه.\n"
+        "آزمایش: یک گردش‌کار پاسخ‌گویی مشتری یا ثبت سفارش را در یک هفته بساز.\n\n"
+        "۳) خدمات کانال بدون چهره YouTube و بازتولید محتوا\n"
+        "نشانه تقاضا: جستجوی خدمات YouTube automation/faceless در Fiverr بیش از ۲۳۰٪ رشد داشته است.\n"
+        "درآمد: تدوین و بسته‌بندی ماهانه، نه وعده درآمد از بازدید.\n"
+        "آزمایش: ۵ ویدئوی نمونه در یک حوزه مشخص منتشر و نرخ نگهداشت را اندازه‌گیری کن.\n\n"
+        "۴) باشگاه اشتراکی تخصصی و گزارش‌های کاربردی\n"
+        "نشانه تقاضا: در نظرسنجی Circle، ۸۸٪ پاسخ‌دهندگان درآمدزایی از عضویت پولی را گزارش کرده‌اند.\n"
+        "درآمد: عضویت ماهانه + خدمات مشاوره/آموزش تکمیلی.\n"
+        "آزمایش: یک گروه کوچک ۲۰ نفره با محتوای هفتگی و تمدید ماهانه بساز.\n\n"
+        "۵) فروش آنلاین و بازفروش کالاهای خاص\n"
+        "نشانه تقاضا: در گزارش Omnisend، ۴۱ تا ۴۸٪ صاحبان side hustle در چهار کشور مورد بررسی، فروش آنلاین داشته‌اند.\n"
+        "درآمد: حاشیه سود فروش، بسته‌بندی یا خدمات تأمین.\n"
+        "آزمایش: قبل از خرید موجودی، ۱۰ سفارش پیش‌فروش یا رزرو معتبر جمع کن.\n\n"
+        "۶) ابزارهای AI تخصصی برای یک شغل مشخص؛ نه بسته‌های عمومی پرامپت\n"
+        "نشانه تقاضا: گزارش جستجوی OwnerKits از رشد چشمگیر AI skills و صفحات گسترده بودجه خبر می‌دهد؛ این گزارش تجاری است و باید مستقل اعتبارسنجی شود.\n"
+        "درآمد: فروش ابزار/مهارت تخصصی + اشتراک به‌روزرسانی.\n"
+        "آزمایش: یک ابزار برای یک مسئله مشخص مثل پاسخ‌گویی فروشگاه یا تهیه پیش‌فاکتور بساز.\n\n"
+        "۷) فایل‌های مدیریت هزینه و بودجه برای مشاغل کوچک\n"
+        "نشانه تقاضا: همان مطالعه برای عبارت budget spreadsheet میانگین حدود ۱۸٬۵۷۵ جستجوی ماهانه آمریکا گزارش کرده است.\n"
+        "درآمد: فروش فایل سفارشی + نصب و آموزش.\n"
+        "آزمایش: یک نمونه برای صنف مشخص بساز و پیش‌فروش بگیر.\n\n"
+        "۸) دستیار صوتی و پاسخ‌گوی هوشمند کسب‌وکار\n"
+        "نشانه تقاضا: Fiverr رشد جستجوی AI voice agents را حدود ۴۹٪ گزارش کرده است.\n"
+        "درآمد: راه‌اندازی اولیه + هزینه نگهداری/مصرف.\n"
+        "آزمایش: نسخه پاسخ‌گویی به پرسش‌های پرتکرار یک مجموعه را بساز.\n\n"
+        "منابع:\n"
+        "Fiverr Business Trends 2026 — https://www.fiverr.com/resources/guides/reports/business-trends-index-june-2026\n"
+        "Circle Creator Economy 2026 — https://circle.so/blog/creator-economy-statistics\n"
+        "Omnisend Side Hustles 2026 — https://www.omnisend.com/side-hustles-report-2026/\n"
+        "OwnerKits Digital Products 2026 — https://ownerkits.com/blog/digital-products-to-sell-in-2026-a-data-study-of-663-search-terms/\n\n"
+        "برای دریافت نسخه متناسب با بودجه و مهارت: /idea"
+    )
 
 
 def support_wallet_text():
@@ -810,6 +946,7 @@ def telegram_webhook():
                     "/riddle معما\n/joke سرگرمی\n"
                     "/plans پلن‌ها\n/premium خرید پریمیوم با Stars\n"
                     "/businessidea خرید ایده اختصاصی با Stars\n"
+                    "/ideas فهرست ایده‌های دارای نشانه تقاضا\n/donate BTC 0.001 ثبت حمایت رمزارزی\n/tx شناسه TXID ارسال هش تراکنش\n"
                     "/funpack بسته سرگرمی پولی با Stars\n"
                     "/support آدرس حمایت اختیاری\n/wallet ورود به ربات کیف پول\n"
                     "/paysupport پشتیبانی پرداخت\n"
@@ -823,7 +960,8 @@ def telegram_webhook():
                 "text": (
                     "مرکز خدمات ربات\n\n"
                     "بازار: /price BTC | /whales | /ask\n"
-                    "کسب‌وکار: /idea | /businessidea\n"
+                    "کسب‌وکار: /idea | /ideas | /businessidea\n"
+                    "حمایت و پرداخت: /plans | /donate BTC 0.001 | /tx ID TXID | /support\n"
                     "سرگرمی: /quiz | /answer B | /riddle | /joke\n"
                     "اشتراک و پرداخت: /plans | /premium | /businessidea | /funpack | /support | /wallet | /paysupport"
                 )
@@ -901,7 +1039,7 @@ def telegram_webhook():
             keyboard = {"inline_keyboard": [[
                 {"text": "باز کردن کیف پول تلگرام", "url": f"https://t.me/{WALLET_BOT_USERNAME}"}
             ]]} if WALLET_BOT_USERNAME else None
-            payload = {"chat_id": chat_id, "text": support_wallet_text()}
+            payload = {"chat_id": chat_id, "text": support_wallet_text() + "\n\nبرای ثبت حمایت و ارسال رسید: /donate BTC مقدار سپس /tx شناسه TXID"}
             if keyboard:
                 payload["reply_markup"] = keyboard
             telegram_call("sendMessage", payload)
@@ -937,11 +1075,75 @@ def telegram_webhook():
                 else "\nبسته سرگرمی: قیمت Stars هنوز تنظیم نشده است."
             ) + "\nخرید خدمات دیجیتال در تلگرام فقط با Telegram Stars انجام می‌شود."
             telegram_call("sendMessage", {"chat_id": chat_id, "text": status_text})
+        elif command == "/ideas":
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": telegram_safe_text(ideas_catalog_text())
+            })
+        elif command == "/donate":
+            donation_parts = argument.split()
+            if len(donation_parts) != 2:
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "روش استفاده: /donate BTC 0.001 یا /donate XRP 25\nشبکه باید دقیقاً مطابق آدرس انتخاب شود."
+                })
+            else:
+                created = create_donation_request(user_id, donation_parts[0], donation_parts[1])
+                if not created:
+                    telegram_call("sendMessage", {
+                        "chat_id": chat_id,
+                        "text": "این شبکه فعال نیست یا مبلغ معتبر نیست. شبکه‌های دارای آدرس را با /support ببین."
+                    })
+                else:
+                    donation_id, wallet = created
+                    name, network, address = wallet
+                    details = (
+                        f"درخواست حمایت: {donation_id}\n"
+                        f"دارایی: {donation_parts[0].upper()} | شبکه: {network}\n"
+                        f"مبلغ اعلامی شما: {donation_parts[1]}\n"
+                        f"آدرس دریافت: {address}"
+                    )
+                    if donation_parts[0].upper() == "XRP" and SUPPORT_XRP_TAG:
+                        details += f"\nDestination Tag الزامی: {SUPPORT_XRP_TAG}"
+                    details += "\n\nپس از انتقال، /tx " + donation_id + " TXID را ارسال کن. تا بررسی مدیر، وضعیت در انتظار تأیید می‌ماند."
+                    telegram_call("sendMessage", {"chat_id": chat_id, "text": details})
+        elif command == "/tx":
+            tx_parts = argument.split(maxsplit=1)
+            if len(tx_parts) != 2 or not submit_donation_tx(tx_parts[0], user_id, tx_parts[1]):
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "رسید ثبت نشد. قالب: /tx شناسه_درخواست TXID (فقط برای درخواست ثبت‌شده خودت)."
+                })
+            else:
+                donation_id = tx_parts[0].upper()
+                with draft_db() as connection:
+                    donation = connection.execute(
+                        "SELECT user_id, asset, network, amount, tx_hash FROM donation_requests WHERE donation_id = ?",
+                        (donation_id,)
+                    ).fetchone()
+                keyboard = {"inline_keyboard": [[
+                    {"text": "تأیید دریافت", "callback_data": f"confirmdonation:{donation_id}"},
+                    {"text": "رد رسید", "callback_data": f"rejectdonation:{donation_id}"}
+                ]]}
+                for admin_id in ADMIN_IDS:
+                    telegram_call("sendMessage", {
+                        "chat_id": admin_id,
+                        "text": (
+                            f"رسید حمایت جدید: {donation_id}\nکاربر: {donation[0]}\n"
+                            f"دارایی: {donation[1]} | شبکه: {donation[2]}\n"
+                            f"مبلغ اعلامی: {donation[3]}\nTXID: {donation[4]}\n"
+                            "این رسید خودکار اعتبارسنجی نشده؛ تراکنش را در اکسپلورر همان شبکه بررسی کن."
+                        ),
+                        "reply_markup": keyboard
+                    })
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "رسید به مدیر ارسال شد؛ تا بررسی واقعی تراکنش، حمایت در انتظار تأیید است."
+                })
         elif command == "/pay":
             telegram_call("sendMessage", {
                 "chat_id": chat_id,
-                "text": "برای خرید خدمات دیجیتال داخل تلگرام از /premium استفاده کن؛ پرداخت با Stars است. "
-                "آدرس‌های رمزارزی فقط برای حمایت اختیاری در /support نمایش داده می‌شوند."
+                "text": "خدمات دیجیتال داخل تلگرام فقط با Telegram Stars فروخته می‌شوند: /plans. برای حمایت رمزارزی اختیاری از /donate استفاده کن."
             })
         elif command == "/paid":
             telegram_call("sendMessage", {
@@ -997,6 +1199,13 @@ def telegram_webhook():
                     f"\nمقصدهای انتشار: {len(TELEGRAM_CHAT_IDS)}"
                 )
             })
+        elif command == "/donations" and admin:
+            rows = pending_donations()
+            body = "\n".join(
+                f"{row[0]} | user={row[1]} | {row[4]} {row[2]} / {row[3]} | TXID={row[5]}"
+                for row in rows
+            ) or "حمایت در انتظار بررسی وجود ندارد."
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": body[:3900]})
         elif command == "/payments" and admin:
             rows = pending_payments()
             body = "\n".join(
@@ -1016,7 +1225,7 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": "درخواست رد شد." if rejected else "درخواست قابل رد پیدا نشد."
             })
-        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/support", "/wallet", "/paysupport"):
+        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/ideas", "/donate", "/tx", "/support", "/wallet", "/paysupport"):
             return jsonify({"ok": True})
         elif command == "/draft" and admin:
             draft_id, body = create_draft()
@@ -1048,6 +1257,27 @@ def telegram_callback():
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "دسترسی غیرمجاز"})
             return jsonify({"ok": True})
         action, _, draft_id = data.partition(":")
+        if action in ("confirmdonation", "rejectdonation"):
+            donation = review_donation(draft_id, action == "confirmdonation")
+            if not donation:
+                telegram_call("answerCallbackQuery", {
+                    "callback_query_id": callback_id,
+                    "text": "درخواست قبلاً بررسی شده یا وجود ندارد"
+                })
+            else:
+                status_text = "حمایت دریافت‌شده تأیید شد." if action == "confirmdonation" else "رسید حمایت رد شد."
+                try:
+                    telegram_call("sendMessage", {
+                        "chat_id": donation[0],
+                        "text": f"{status_text} شناسه: {draft_id}"
+                    })
+                except Exception:
+                    log.warning("Could not notify donor after manual review")
+                telegram_call("answerCallbackQuery", {
+                    "callback_query_id": callback_id,
+                    "text": "وضعیت درخواست ثبت شد"
+                })
+            return jsonify({"ok": True})
         draft = get_draft(draft_id)
         if not draft:
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "پیش‌نویس منقضی یا ناموجود است"})
