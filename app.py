@@ -239,11 +239,15 @@ def telegram_call(method, payload, timeout=15):
         f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
         json=payload, timeout=timeout
     )
-    response.raise_for_status()
-    data = response.json()
-    if not data.get("ok"):
-        raise RuntimeError(f"Telegram API error: {data}")
-    return data["result"]
+    try:
+        data = response.json()
+    except ValueError:
+        data = {}
+    if not response.ok or not data.get("ok"):
+        # Log only Telegram's public description and HTTP status; never log token or request URL.
+        description = data.get("description") or response.reason or "Unknown Telegram API error"
+        raise RuntimeError(f"Telegram API {method} failed (HTTP {response.status_code}): {description}")
+    return data.get("result")
 
 
 def telegram_safe_text(text, limit=4000):
@@ -662,7 +666,7 @@ def configure_telegram_webhook():
         WEBHOOK_CONFIGURED = True
         log.info("Telegram webhook configured successfully")
     except Exception as exc:
-        log.warning("Telegram webhook setup attempt failed; scheduled retry remains active: %s", type(exc).__name__)
+        log.warning("Telegram webhook setup attempt failed; scheduled retry remains active: %s", str(exc))
 
 
 def create_draft():
