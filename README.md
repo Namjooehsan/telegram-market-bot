@@ -24,6 +24,7 @@
 - `OPENAI_API_KEY`: کلید API خصوصی برای تحلیل هوشمند
 - `OPENAI_MODEL`: پیش‌فرض اقتصادی `gpt-6-luna`
 - `OPENAI_BASE_URL`: آدرس API سازگار با Responses API؛ فقط از ارائه‌دهنده مجاز استفاده شود
+- `AI_DAILY_REQUEST_LIMIT`: سقف کلی فراخوانی هوش مصنوعی در هر روز؛ پیش‌فرض ۱۲ بار برای کنترل هزینه
 - `PAYMENTS_ENABLED`: باید تا زمان تکمیل تنظیمات پرداخت `false` بماند
 - `PAYMENT_ASSET`, `PAYMENT_NETWORK`, `PAYMENT_RECEIVE_ADDRESS`, `PREMIUM_PRICE`: مشخصات دریافتی که فقط پس از تصمیم صاحب کسب‌وکار تنظیم می‌شوند
 
