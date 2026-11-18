@@ -43,6 +43,7 @@ PAYMENT_NETWORK = os.getenv("PAYMENT_NETWORK", "")
 PAYMENT_RECEIVE_ADDRESS = os.getenv("PAYMENT_RECEIVE_ADDRESS", "")
 PREMIUM_PRICE = os.getenv("PREMIUM_PRICE", "")
 PREMIUM_DURATION_DAYS = int(os.getenv("PREMIUM_DURATION_DAYS", "30"))
+AI_DAILY_REQUEST_LIMIT = max(0, int(os.getenv("AI_DAILY_REQUEST_LIMIT", "12")))
 
 
 def binance_get(path, params=None):
@@ -85,6 +86,9 @@ def market_snapshot(symbol="BTCUSDT"):
 def openai_text(prompt, system_prompt, max_output_tokens=650):
     """Call the OpenAI Responses API; skip cleanly until a private key is configured."""
     if not OPENAI_API_KEY:
+        return None
+    if not consume_ai_quota():
+        log.warning("Daily AI request limit reached; skipping this AI response")
         return None
     try:
         response = requests.post(
@@ -215,9 +219,18 @@ def telegram_call(method, payload):
     return data["result"]
 
 
+def telegram_safe_text(text, limit=4000):
+    text = str(text)
+    if len(text) <= limit:
+        return text
+    suffix = "\n… ادامه گزارش برای محدودیت تلگرام کوتاه شد."
+    return text[:max(0, limit - len(suffix))] + suffix
+
+
 def send_telegram(text, reply_markup=None):
     if not TELEGRAM_CHAT_IDS:
         raise RuntimeError("TELEGRAM_CHAT_IDS or TELEGRAM_CHAT_ID is not configured")
+    text = telegram_safe_text(text)
     results = []
     errors = []
     for chat_id in TELEGRAM_CHAT_IDS:
@@ -272,6 +285,12 @@ def draft_db():
             reviewed_at TEXT
         )
     """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS ai_usage (
+            usage_date TEXT PRIMARY KEY,
+            request_count INTEGER NOT NULL DEFAULT 0
+        )
+    """)
     return connection
 
 
@@ -289,6 +308,25 @@ def get_draft(draft_id):
 def delete_draft(draft_id):
     with draft_db() as connection:
         connection.execute("DELETE FROM drafts WHERE draft_id = ?", (draft_id,))
+
+
+def consume_ai_quota():
+    """Atomically enforce a global daily cap on AI API requests."""
+    if AI_DAILY_REQUEST_LIMIT <= 0:
+        return False
+    today = datetime.now(timezone.utc).date().isoformat()
+    with draft_db() as connection:
+        row = connection.execute(
+            "SELECT request_count FROM ai_usage WHERE usage_date = ?", (today,)
+        ).fetchone()
+        if row and row[0] >= AI_DAILY_REQUEST_LIMIT:
+            return False
+        connection.execute(
+            """INSERT INTO ai_usage (usage_date, request_count) VALUES (?, 1)
+            ON CONFLICT(usage_date) DO UPDATE SET request_count = request_count + 1""",
+            (today,)
+        )
+    return True
 
 
 def payment_setup_ready():
@@ -398,7 +436,7 @@ def scheduled_draft():
     for admin_id in ADMIN_IDS:
         telegram_call("sendMessage", {
             "chat_id": admin_id,
-            "text": f"پیش‌نویس زمان‌بندی‌شده {draft_id}\n\n{body}",
+            "text": telegram_safe_text(f"پیش‌نویس زمان‌بندی‌شده {draft_id}\n\n{body}"),
             "reply_markup": keyboard
         })
 
@@ -583,7 +621,7 @@ def telegram_webhook():
             else:
                 answer = ai_answer(argument) or "پاسخ هوش مصنوعی فعلاً در دسترس نیست."
                 telegram_call("sendMessage", {
-                    "chat_id": chat_id, "text": answer[:3900], "disable_web_page_preview": True
+                    "chat_id": chat_id, "text": telegram_safe_text(answer), "disable_web_page_preview": True
                 })
         elif command == "/whales":
             signals = []
@@ -640,7 +678,8 @@ def telegram_webhook():
                 {"text": "تأیید و انتشار", "callback_data": f"approve:{draft_id}"},
                 {"text": "رد گزارش", "callback_data": f"reject:{draft_id}"}
             ]]}
-            telegram_call("sendMessage", {"chat_id": chat_id, "text": f"پیش‌نویس {draft_id}\n\n{body}",
+            telegram_call("sendMessage", {"chat_id": chat_id,
+                                           "text": telegram_safe_text(f"پیش‌نویس {draft_id}\n\n{body}"),
                                            "reply_markup": keyboard})
     except Exception:
         log.exception("Telegram command failed")
