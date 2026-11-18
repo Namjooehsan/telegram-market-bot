@@ -135,3 +135,11 @@ def test_payment_invoice_cannot_be_submitted_by_another_user(tmp_path, monkeypat
     monkeypatch.setattr(market_app, "PREMIUM_PRICE", "0.001")
     invoice_id = market_app.create_payment_invoice("67890")
     assert market_app.submit_payment(invoice_id, "99999", "b" * 64) is False
+
+
+def test_ai_daily_quota_is_enforced(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "bot.sqlite3"))
+    monkeypatch.setattr(market_app, "AI_DAILY_REQUEST_LIMIT", 2)
+    assert market_app.consume_ai_quota() is True
+    assert market_app.consume_ai_quota() is True
+    assert market_app.consume_ai_quota() is False
