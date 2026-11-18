@@ -200,3 +200,32 @@ def test_fun_pack_requires_configured_stars_price(monkeypatch):
     monkeypatch.setattr(market_app, "STARS_FUNPACK_PRICE", 45)
     product = market_app.stars_product("fun_pack")
     assert product["price"] == 45
+
+
+def test_manual_donation_receipt_requires_user_and_admin_review(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "donations.sqlite3"))
+    monkeypatch.setattr(market_app, "SUPPORT_BTC_ADDRESS", "bc1qtestdonationaddress")
+    created = market_app.create_donation_request("67890", "BTC", "0.001")
+    assert created is not None
+    donation_id, wallet = created
+    assert wallet[1] == "BTC"
+    assert market_app.submit_donation_tx(donation_id, "99999", "a" * 64) is False
+    assert market_app.submit_donation_tx(donation_id, "67890", "a" * 64) is True
+    pending = market_app.pending_donations()
+    assert pending[0][0] == donation_id
+    assert market_app.review_donation(donation_id, True)[0] == "67890"
+    assert market_app.review_donation(donation_id, True) is None
+
+
+def test_donation_requires_a_configured_supported_wallet(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "donations.sqlite3"))
+    monkeypatch.setattr(market_app, "SUPPORT_BTC_ADDRESS", "")
+    assert market_app.create_donation_request("67890", "BTC", "0.001") is None
+    assert market_app.create_donation_request("67890", "ETH", "0.1") is None
+
+
+def test_ideas_catalog_contains_demand_signals_and_no_income_guarantee():
+    text = market_app.ideas_catalog_text()
+    assert "Fiverr" in text
+    assert "Circle" in text
+    assert "تضمین فروش یا سود" in text
