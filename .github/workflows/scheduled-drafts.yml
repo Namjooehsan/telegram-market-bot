@@ -1,0 +1,54 @@
+name: Scheduled Telegram market drafts
+
+on:
+  schedule:
+    # 08:00, 12:00, 16:00 and 21:00 Asia/Tehran (UTC+3:30)
+    - cron: "30 4,8,12,17 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  create-approved-draft:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate required secrets
+        env:
+          APP_WEBHOOK_URL: ${{ secrets.APP_WEBHOOK_URL }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+        run: |
+          test -n "$APP_WEBHOOK_URL"
+          test -n "$TELEGRAM_WEBHOOK_SECRET"
+          test -n "$TELEGRAM_ADMIN_ID"
+          test -n "$TELEGRAM_ADMIN_CHAT_ID"
+
+      - name: Request a market draft for admin approval
+        env:
+          APP_WEBHOOK_URL: ${{ secrets.APP_WEBHOOK_URL }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          TELEGRAM_ADMIN_ID: ${{ secrets.TELEGRAM_ADMIN_ID }}
+          TELEGRAM_ADMIN_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import json, os, time
+          payload = {
+              "update_id": int(time.time()),
+              "message": {
+                  "message_id": int(time.time()),
+                  "from": {"id": int(os.environ["TELEGRAM_ADMIN_ID"]), "is_bot": False},
+                  "chat": {"id": int(os.environ["TELEGRAM_ADMIN_CHAT_ID"]), "type": "private"},
+                  "date": int(time.time()),
+                  "text": "/draft"
+              }
+          }
+          with open("telegram-update.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f)
+          PY
+          curl --fail --silent --show-error --max-time 30 \
+            -X POST "$APP_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Telegram-Bot-Api-Secret-Token: $TELEGRAM_WEBHOOK_SECRET" \
+            --data-binary @telegram-update.json

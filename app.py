@@ -22,6 +22,7 @@ DRAFTS = {}
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", TELEGRAM_CHAT_ID).split(",") if x.strip()]
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 ADMIN_IDS = {x.strip() for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if x.strip()}
 BINANCE_BASE = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
@@ -96,12 +97,22 @@ def telegram_call(method, payload):
 
 
 def send_telegram(text, reply_markup=None):
-    if not TELEGRAM_CHAT_ID:
-        raise RuntimeError("TELEGRAM_CHAT_ID is not configured")
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "disable_web_page_preview": True}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    return telegram_call("sendMessage", payload)
+    if not TELEGRAM_CHAT_IDS:
+        raise RuntimeError("TELEGRAM_CHAT_IDS or TELEGRAM_CHAT_ID is not configured")
+    results = []
+    errors = []
+    for chat_id in TELEGRAM_CHAT_IDS:
+        payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        try:
+            results.append(telegram_call("sendMessage", payload))
+        except Exception as exc:
+            log.exception("Telegram delivery failed for a configured destination")
+            errors.append(str(exc))
+    if errors:
+        raise RuntimeError(f"Telegram delivery failed for {len(errors)} destination(s)")
+    return results
 
 
 def is_admin(user_id):
