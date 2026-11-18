@@ -169,7 +169,7 @@ def scheduled_draft():
     for admin_id in ADMIN_IDS:
         telegram_call("sendMessage", {
             "chat_id": admin_id,
-            "text": f"پیش‌نویس زمان‌بندی‌شده {draft_id}\\n\\n{body}",
+            "text": f"پیش‌نویس زمان‌بندی‌شده {draft_id}\n\n{body}",
             "reply_markup": keyboard
         })
 
