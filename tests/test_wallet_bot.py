@@ -36,10 +36,15 @@ def test_store_refuses_plaintext_without_key(tmp_path, monkeypatch):
         WalletStore(str(tmp_path / "wallet.sqlite3"))
 
 
-def test_wrong_key_is_detected(tmp_path, monkeypatch):
+def test_wrong_key_is_detected_on_reopen(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "wallet.sqlite3")
     monkeypatch.setenv("WALLET_DATA_KEY", Fernet.generate_key().decode())
-    store = WalletStore(str(tmp_path / "wallet.sqlite3"))
+    store = WalletStore(db_path)
     store.add("100", "BTC", "bc1qpublicaddress")
+
+    # The running store intentionally retains its startup key. A restarted
+    # process (represented by a new store instance) must reject a wrong key.
     monkeypatch.setenv("WALLET_DATA_KEY", Fernet.generate_key().decode())
+    restarted_store = WalletStore(db_path)
     with pytest.raises(RuntimeError, match="does not match"):
-        store.list_for_user("100")
+        restarted_store.list_for_user("100")
