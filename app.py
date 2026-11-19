@@ -1110,7 +1110,7 @@ def review_partner_leads(limit=8):
         if not answer:
             continue
         try:
-            cleaned = answer.strip()
+            cleaned = answer.strip().strip(chr(96)).strip()
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:].strip()
             data = json.loads(cleaned)
@@ -2091,7 +2091,7 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": "درخواست رد شد." if rejected else "درخواست قابل رد پیدا نشد."
             })
-        elif not admin and command not in ("/start", "/help", "/menu", "/apps", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/ideas", "/markets", "/opportunities", "/marketsearch", "/whalestatus", "/whalealerts", "/donate", "/tx", "/support", "/wallet", "/paysupport"):
+        elif not admin and command not in ("/start", "/help", "/menu", "/apps", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/ideas", "/markets", "/opportunities", "/marketsearch", "/whalestatus", "/whalealerts", "/donate", "/tx", "/support", "/wallet", "/paysupport", "/invite"):
             return jsonify({"ok": True})
         elif command == "/draft" and admin:
             draft_id, body = create_draft()
