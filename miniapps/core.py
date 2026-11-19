@@ -166,6 +166,7 @@ def build_paid_prompt(product_code: str, form: dict, market_data: list[dict] | N
     if language not in LANGUAGES:
         language = "fa"
     region = str(form.get("region", "")).strip()[:100]
+    dialect = str(form.get("dialect", "")).strip()[:120]
     topic = str(form.get("topic", "")).strip()[:1600]
     audience = str(form.get("audience", "")).strip()[:500]
     offer = str(form.get("offer", "")).strip()[:400]
@@ -175,6 +176,7 @@ def build_paid_prompt(product_code: str, form: dict, market_data: list[dict] | N
     common = (
         f"Write the complete result in {LANGUAGES[language]} (language code: {language}). "
         f"Target region/country: {region or 'not specified'}. "
+        f"Local dialect or regional-language preference: {dialect or 'use the selected standard language'}. "
         "Respect local language, culture, units and legal constraints. "
         "Do not invent facts, customer testimonials, market statistics, legal approvals or guaranteed outcomes. "
         "Separate assumptions from verified inputs. Never promise income, investment profit or guaranteed growth. "
