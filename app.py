@@ -1603,10 +1603,11 @@ def telegram_webhook():
     argument = parts[1].strip() if len(parts) > 1 else ""
     admin = is_admin(user_id)
     try:
-        if command == "/start" and argument:
-            AD_CENTER.record_start_attribution(user_id, argument)
-            if argument.startswith("ref_"):
-                PARTNER_RESEARCHER.record_referral(user_id, argument[4:])
+        if command == "/start":
+            if argument:
+                AD_CENTER.record_start_attribution(user_id, argument)
+            inviter_id = argument[4:] if argument.startswith("ref_") else None
+            PARTNER_RESEARCHER.record_referral(user_id, inviter_id)
         if command in ("/start", "/help"):
             telegram_call("sendMessage", {
                 "chat_id": chat_id,
