@@ -258,7 +258,12 @@ class AdvertisingCenter:
             rows = conn.execute("""
                 SELECT c.campaign_id, c.name, c.status,
                        COUNT(DISTINCT x.creative_id) AS creatives,
-                       SUM(CASE WHEN x.status = 'published' THEN 1 ELSE 0 END) AS published
+                       SUM(CASE WHEN x.status = 'published' THEN 1 ELSE 0 END) AS published,
+                       (SELECT COUNT(DISTINCT a.user_id) FROM ad_user_attribution a
+                        WHERE a.last_campaign_id = c.campaign_id) AS attributed_users,
+                       (SELECT COUNT(*) FROM ad_deliveries d
+                        JOIN ad_creatives cx ON cx.creative_id = d.creative_id
+                        WHERE cx.campaign_id = c.campaign_id AND d.status = 'sent') AS successful_deliveries
                 FROM ad_campaigns c
                 LEFT JOIN ad_creatives x ON x.campaign_id = c.campaign_id
                 GROUP BY c.campaign_id ORDER BY c.created_at DESC LIMIT 10
@@ -302,12 +307,19 @@ class AdvertisingCenter:
                 SELECT COUNT(*) FROM donation_requests
                 WHERE status = 'submitted' AND created_at >= ? AND created_at < ?
             """, (start_utc, end_utc)).fetchone()[0]
+            campaign_starts = conn.execute("""
+                SELECT last_campaign_id AS campaign_id, COUNT(DISTINCT user_id) AS user_count
+                FROM ad_user_attribution
+                WHERE last_seen_at >= ? AND last_seen_at < ?
+                GROUP BY last_campaign_id ORDER BY user_count DESC
+            """, (start_utc, end_utc)).fetchall()
         return {
             "date": local_now.date().isoformat(),
             "stars": [dict(x) for x in stars],
             "attributed_stars": [dict(x) for x in attributed],
             "approved_donations": [dict(x) for x in donations],
             "approved_external": [dict(x) for x in external],
+            "campaign_starts": [dict(x) for x in campaign_starts],
             "unverified_submissions": int(submitted),
         }
 
@@ -320,6 +332,12 @@ class AdvertisingCenter:
                 lines.append(f"- {row['product_code']}: {row['order_count']} سفارش، {row['stars_total'] or 0} Stars")
         else:
             lines.append("- امروز پرداخت موفقی ثبت نشده است.")
+        lines.append("کاربران یکتای ورودی از لینک کمپین (شروع ربات، نه بازدید پست):")
+        if report["campaign_starts"]:
+            for row in report["campaign_starts"]:
+                lines.append(f"- {row['campaign_id']}: {row['user_count']} کاربر یکتا")
+        else:
+            lines.append("- امروز ورودی منتسب‌شده‌ای ثبت نشده است.")
         lines.append("فروش منتسب به لینک کمپین:")
         if report["attributed_stars"]:
             for row in report["attributed_stars"]:
