@@ -27,6 +27,19 @@ class WalletStore:
                 )
             """)
             db.execute("CREATE INDEX IF NOT EXISTS idx_wallet_owner ON watched_addresses(telegram_user_id)")
+            sample = db.execute(
+                "SELECT address_ciphertext, label_ciphertext FROM watched_addresses ORDER BY id LIMIT 1"
+            ).fetchone()
+        # Fail closed before polling: never append records under a replacement key
+        # while older encrypted records remain unreadable.
+        if sample:
+            try:
+                self.fernet.decrypt(sample[0])
+                self.fernet.decrypt(sample[1])
+            except InvalidToken as exc:
+                raise RuntimeError(
+                    "Wallet data key does not match the key used to encrypt this database"
+                ) from exc
 
     def _connect(self):
         db = sqlite3.connect(self.db_path, timeout=10)
