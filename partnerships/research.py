@@ -174,7 +174,7 @@ class PartnerResearcher:
             cur=conn.execute("""
                 UPDATE partner_leads SET priority_score=?,partner_type=?,ai_assessment=?,
                 outreach_draft=?,status='ai_reviewed',last_seen_at=?
-                WHERE lead_id=? AND status NOT IN ('rejected','applied','approved')
+                WHERE lead_id=? AND status NOT IN ('rejected','applied','approved','ai_reviewed')
             """,(score,str(partner_type)[:80],str(assessment)[:2500],str(outreach)[:3500],_now(),lead_id))
             return cur.rowcount==1
 
