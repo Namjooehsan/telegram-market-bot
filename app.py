@@ -14,7 +14,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import requests
 from opportunity_research import OpportunityResearcher, get_market_universe, format_market_universe, format_opportunity_digest
 from advertising import AdvertisingCenter, LANGUAGES, PLATFORMS
-from flask import Flask, jsonify, request
+from miniapps.core import FREE_APPS, PAID_PRODUCTS, FREE_CATEGORIES, verify_init_data, paid_products_with_prices, build_paid_prompt
+from flask import Flask, jsonify, request, send_from_directory
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from dotenv import load_dotenv
@@ -57,6 +58,18 @@ AI_DAILY_REQUEST_LIMIT = max(0, int(os.getenv("AI_DAILY_REQUEST_LIMIT", "12")))
 STARS_PREMIUM_PRICE = max(0, int(os.getenv("STARS_PREMIUM_PRICE", "0")))
 STARS_IDEA_PRICE = max(0, int(os.getenv("STARS_IDEA_PRICE", "0")))
 STARS_FUNPACK_PRICE = max(0, int(os.getenv("STARS_FUNPACK_PRICE", "0")))
+MINIAPP_AD_CAMPAIGN_STARS = max(0, int(os.getenv("MINIAPP_AD_CAMPAIGN_STARS", "0")))
+MINIAPP_BUSINESS_PLAN_STARS = max(0, int(os.getenv("MINIAPP_BUSINESS_PLAN_STARS", "0")))
+MINIAPP_CONTENT_CALENDAR_STARS = max(0, int(os.getenv("MINIAPP_CONTENT_CALENDAR_STARS", "0")))
+MINIAPP_AUTOMATION_BLUEPRINT_STARS = max(0, int(os.getenv("MINIAPP_AUTOMATION_BLUEPRINT_STARS", "0")))
+MINIAPP_MARKET_BRIEF_STARS = max(0, int(os.getenv("MINIAPP_MARKET_BRIEF_STARS", "0")))
+MINIAPP_PRODUCT_PRICES = {
+    "miniapp_ad_campaign": MINIAPP_AD_CAMPAIGN_STARS,
+    "miniapp_business_plan": MINIAPP_BUSINESS_PLAN_STARS,
+    "miniapp_content_calendar": MINIAPP_CONTENT_CALENDAR_STARS,
+    "miniapp_automation_blueprint": MINIAPP_AUTOMATION_BLUEPRINT_STARS,
+    "miniapp_market_brief": MINIAPP_MARKET_BRIEF_STARS,
+}
 WALLET_BOT_USERNAME = os.getenv("TELEGRAM_WALLET_BOT_USERNAME", "EhsanWallet_bot").strip().lstrip("@")
 SUPPORT_BTC_ADDRESS = os.getenv("SUPPORT_BTC_ADDRESS", "")
 SUPPORT_BCH_ADDRESS = os.getenv("SUPPORT_BCH_ADDRESS", "")
@@ -384,6 +397,19 @@ def draft_db():
             paid_at TEXT
         )
     """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS miniapp_purchases (
+            user_id TEXT NOT NULL,
+            product_code TEXT NOT NULL,
+            stars_amount INTEGER NOT NULL,
+            telegram_charge_id TEXT NOT NULL UNIQUE,
+            purchased_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'purchased',
+            content TEXT,
+            generated_at TEXT,
+            PRIMARY KEY (user_id, product_code)
+        )
+    """)
     AD_CENTER.ensure_schema(connection)
     return connection
 
@@ -447,7 +473,31 @@ def stars_product(product_code):
             "description": "۱۰ سؤال دانستنی و معمای منطقی همراه با پاسخ",
             "price": STARS_FUNPACK_PRICE,
         },
-
+        "miniapp_ad_campaign": {
+            "title": "کارخانه کمپین چندزبانه",
+            "description": "تولید بسته کمپین بومی‌سازی‌شده برای کشور و مخاطب هدف",
+            "price": MINIAPP_AD_CAMPAIGN_STARS,
+        },
+        "miniapp_business_plan": {
+            "title": "طراح طرح کسب‌وکار",
+            "description": "طرح اجرایی، مدل درآمد و برنامه اعتبارسنجی",
+            "price": MINIAPP_BUSINESS_PLAN_STARS,
+        },
+        "miniapp_content_calendar": {
+            "title": "تقویم محتوایی حرفه‌ای",
+            "description": "تقویم ۱۴روزه محتوا و ایده‌های انتشار",
+            "price": MINIAPP_CONTENT_CALENDAR_STARS,
+        },
+        "miniapp_automation_blueprint": {
+            "title": "طراح اتوماسیون کسب‌وکار",
+            "description": "نقشه گردش‌کار، گره‌ها، خطاگیری و معیارهای سنجش",
+            "price": MINIAPP_AUTOMATION_BLUEPRINT_STARS,
+        },
+        "miniapp_market_brief": {
+            "title": "گزارش‌ساز هوشمند بازار",
+            "description": "خلاصه داده‌محور دارایی‌های منتخب و سناریوهای ریسک",
+            "price": MINIAPP_MARKET_BRIEF_STARS,
+        },
     }
     product = products.get(product_code)
     return product if product and 1 <= product["price"] <= 25000 else None
