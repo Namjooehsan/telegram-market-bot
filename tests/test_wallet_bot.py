@@ -48,3 +48,15 @@ def test_wrong_key_is_detected_on_reopen(tmp_path, monkeypatch):
     restarted_store = WalletStore(db_path)
     with pytest.raises(RuntimeError, match="does not match"):
         restarted_store.list_for_user("100")
+
+
+
+def test_store_limits_each_user_to_30_addresses(tmp_path, monkeypatch):
+    monkeypatch.setenv("WALLET_DATA_KEY", Fernet.generate_key().decode())
+    store = WalletStore(str(tmp_path / "wallet.sqlite3"))
+    for i in range(30):
+        store.add("100", "BTC", f"bc1qpublicaddress{i}")
+    with pytest.raises(ValueError, match="maximum of 30"):
+        store.add("100", "BTC", "bc1qpublicaddress31")
+    # The limit is per user, not global.
+    assert store.add("200", "BTC", "bc1qpublicaddress32") > 0
