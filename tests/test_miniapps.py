@@ -82,10 +82,11 @@ def test_telegram_init_data_rejects_tampering_duplicates_and_malformed_queries()
 def test_paid_prompts_are_localized_and_do_not_promise_profit():
     prompt = build_paid_prompt(
         "miniapp_ad_campaign",
-        {"topic": "local coffee shop", "region": "Istanbul, Türkiye", "language": "tr"},
+        {"topic": "local coffee shop", "region": "Istanbul, Türkiye", "dialect": "Istanbul Turkish", "language": "tr"},
     )
     assert "Türkçe" in prompt
     assert "Istanbul, Türkiye" in prompt
+    assert "Istanbul Turkish" in prompt
     assert "consent-based" in prompt
     assert "Never promise income" in prompt
 
