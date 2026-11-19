@@ -4,6 +4,7 @@ import json
 from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import urlencode
+import time
 
 import app as market_app
 from miniapps.core import (
@@ -16,7 +17,8 @@ from miniapps.core import (
 )
 
 
-def signed_init_data(bot_token="test-bot-token", user_id=12345, now=1_800_000_000):
+def signed_init_data(bot_token="test-bot-token", user_id=12345, now=None):
+    now = int(time.time()) if now is None else int(now)
     values = {
         "auth_date": str(now),
         "query_id": "AAE-test-query",
