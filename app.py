@@ -1185,6 +1185,217 @@ def health():
     return jsonify({"ok": True, "time": datetime.now(timezone.utc).isoformat()})
 
 
+def verified_miniapp_user():
+    """Return the Telegram-verified Mini App user or None; never trust client-supplied IDs."""
+    raw = request.headers.get("X-Telegram-Init-Data", "")
+    return verify_init_data(raw, TELEGRAM_TOKEN)
+
+
+def miniapp_purchase_for_user(user_id, product_code):
+    with draft_db() as connection:
+        row = connection.execute(
+            """SELECT stars_amount, status, content, generated_at
+            FROM miniapp_purchases WHERE user_id = ? AND product_code = ?""",
+            (str(user_id), product_code)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+@app.get("/miniapp")
+@limiter.limit("60 per minute")
+def miniapp_home():
+    return send_from_directory(str(Path(__file__).resolve().parent / "miniapps"), "index.html")
+
+
+@app.get("/api/miniapp/catalog")
+@limiter.limit("60 per minute")
+def miniapp_catalog():
+    user = verified_miniapp_user()
+    if not user:
+        return jsonify({"error": "Telegram session could not be verified. Open this app from the bot."}), 401
+    with draft_db() as connection:
+        rows = connection.execute(
+            """SELECT product_code, status, content
+            FROM miniapp_purchases WHERE user_id = ?""",
+            (user["id"],)
+        ).fetchall()
+    purchases = {row["product_code"]: dict(row) for row in rows}
+    products = paid_products_with_prices(MINIAPP_PRODUCT_PRICES, set(purchases))
+    for item in products:
+        purchase = purchases.get(item["code"])
+        item["has_result"] = bool(purchase and purchase.get("content"))
+        item["result"] = purchase.get("content") if purchase and purchase.get("content") else None
+        item["generation_status"] = purchase.get("status") if purchase else None
+    return jsonify({
+        "free_apps": FREE_APPS,
+        "free_categories": FREE_CATEGORIES,
+        "paid_products": products,
+        "language_code": user.get("language_code", "fa"),
+    })
+
+
+@app.get("/api/miniapp/market-data")
+@limiter.limit("30 per minute")
+def miniapp_market_data():
+    """Public, read-only price ticker for the free market board."""
+    items = []
+    for symbol in TRACKED_SYMBOLS[:8]:
+        if not symbol.endswith("USDT") or len(symbol) > 20:
+            continue
+        try:
+            ticker = binance_get("/api/v3/ticker/24hr", {"symbol": symbol})
+            items.append({
+                "symbol": symbol,
+                "price": float(ticker["lastPrice"]),
+                "change_24h_pct": float(ticker["priceChangePercent"]),
+                "quote_volume_24h": float(ticker["quoteVolume"]),
+                "source": "Binance Spot public ticker",
+                "as_of": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as exc:
+            log.warning("Mini App ticker refresh failed for %s: %s", symbol, exc)
+    if not items:
+        return jsonify({"error": "Market data provider is temporarily unavailable."}), 502
+    return jsonify({"items": items})
+
+
+@app.post("/api/miniapp/invoice")
+@limiter.limit("8 per minute")
+def miniapp_invoice():
+    user = verified_miniapp_user()
+    if not user:
+        return jsonify({"error": "Telegram session could not be verified."}), 401
+    if not OPENAI_API_KEY or OPENAI_AUTH_FAILED:
+        return jsonify({"error": "AI generation is not available yet. Add a valid OpenAI API key first."}), 503
+    payload = request.get_json(silent=True) or {}
+    product_code = str(payload.get("product_code", "")).strip()
+    if product_code not in MINIAPP_PRODUCT_PRICES:
+        return jsonify({"error": "Unknown Mini App product."}), 400
+    product = stars_product(product_code)
+    if not product:
+        return jsonify({"error": "This product is not priced yet. No payment has been requested."}), 409
+    existing = miniapp_purchase_for_user(user["id"], product_code)
+    if existing:
+        return jsonify({"error": "You have already purchased this product. Reopen the app to use it."}), 409
+    try:
+        invoice = create_miniapp_invoice_link(user["id"], product_code)
+    except Exception:
+        log.exception("Mini App invoice-link creation failed")
+        return jsonify({"error": "Telegram could not create the Stars invoice. Please retry shortly."}), 502
+    if not invoice:
+        return jsonify({"error": "A purchase or pending order already exists for this product."}), 409
+    return jsonify(invoice)
+
+
+@app.post("/api/miniapp/generate")
+@limiter.limit("5 per minute")
+def miniapp_generate():
+    user = verified_miniapp_user()
+    if not user:
+        return jsonify({"error": "Telegram session could not be verified."}), 401
+    payload = request.get_json(silent=True) or {}
+    product_code = str(payload.get("product_code", "")).strip()
+    if product_code not in MINIAPP_PRODUCT_PRICES:
+        return jsonify({"error": "Unknown Mini App product."}), 400
+    topic = str(payload.get("topic", "")).strip()
+    if len(topic) < 5 or len(topic) > 1600:
+        return jsonify({"error": "Describe the task in 5 to 1600 characters."}), 400
+    form = {
+        "topic": topic,
+        "audience": str(payload.get("audience", ""))[:500],
+        "region": str(payload.get("region", ""))[:100],
+        "offer": str(payload.get("offer", ""))[:400],
+        "platform": str(payload.get("platform", ""))[:80],
+        "language": str(payload.get("language", "fa"))[:16],
+        "budget": str(payload.get("budget", ""))[:100],
+    }
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    with draft_db() as connection:
+        entitlement = connection.execute(
+            """SELECT stars_amount, status, content, generated_at
+            FROM miniapp_purchases WHERE user_id = ? AND product_code = ?""",
+            (user["id"], product_code)
+        ).fetchone()
+        if not entitlement:
+            return jsonify({"error": "This product has not been purchased by this Telegram account."}), 403
+        if entitlement["content"] and entitlement["status"] == "generated":
+            return jsonify({"content": entitlement["content"], "already_generated": True})
+        if entitlement["status"] == "generating":
+            started = entitlement["generated_at"]
+            try:
+                stale = not started or (now - datetime.fromisoformat(started)).total_seconds() > 900
+            except ValueError:
+                stale = True
+            if not stale:
+                return jsonify({"error": "Your result is still being generated. Please retry in a moment."}), 409
+            connection.execute(
+                """UPDATE miniapp_purchases SET status = 'purchased'
+                WHERE user_id = ? AND product_code = ? AND status = 'generating'""",
+                (user["id"], product_code)
+            )
+        cursor = connection.execute(
+            """UPDATE miniapp_purchases SET status = 'generating', generated_at = ?
+            WHERE user_id = ? AND product_code = ? AND status = 'purchased' AND content IS NULL""",
+            (now_iso, user["id"], product_code)
+        )
+        if cursor.rowcount != 1:
+            return jsonify({"error": "The product is not ready to generate. Please reopen the app."}), 409
+
+    market_data = []
+    if product_code == "miniapp_market_brief":
+        for symbol in TRACKED_SYMBOLS[:5]:
+            try:
+                market_data.append(market_snapshot(symbol))
+            except Exception as exc:
+                log.warning("Mini App market brief could not retrieve %s: %s", symbol, exc)
+        if not market_data:
+            with draft_db() as connection:
+                connection.execute(
+                    """UPDATE miniapp_purchases SET status = 'purchased', generated_at = NULL
+                    WHERE user_id = ? AND product_code = ? AND status = 'generating'""",
+                    (user["id"], product_code)
+                )
+            return jsonify({"error": "Live market data is unavailable. Your purchase is preserved; retry later."}), 503
+
+    try:
+        prompt = build_paid_prompt(product_code, form, market_data=market_data)
+        result = openai_text(
+            prompt,
+            "You are NOVA, a precise multilingual product assistant. Follow the requested output language and structure. "
+            "Be practical and honest about uncertainty. Never invent evidence, claim legal approval, promise income or investment profit, "
+            "recommend spam, or copy proprietary material. Mark assumptions clearly.",
+            max_output_tokens=2200,
+        )
+    except Exception:
+        log.exception("Mini App output generation failed")
+        result = None
+
+    if not result:
+        with draft_db() as connection:
+            connection.execute(
+                """UPDATE miniapp_purchases SET status = 'purchased', generated_at = NULL
+                WHERE user_id = ? AND product_code = ? AND status = 'generating'""",
+                (user["id"], product_code)
+            )
+        return jsonify({"error": "The result could not be generated. Your purchase is preserved; retry later."}), 503
+
+    with draft_db() as connection:
+        connection.execute(
+            """UPDATE miniapp_purchases
+            SET status = 'generated', content = ?, generated_at = ?
+            WHERE user_id = ? AND product_code = ? AND status = 'generating' AND content IS NULL""",
+            (result, datetime.now(timezone.utc).isoformat(), user["id"], product_code)
+        )
+        saved = connection.execute(
+            "SELECT content FROM miniapp_purchases WHERE user_id = ? AND product_code = ?",
+            (user["id"], product_code)
+        ).fetchone()
+    if not saved or not saved["content"]:
+        return jsonify({"error": "The result is being finalized. Reopen the Mini App shortly."}), 503
+    return jsonify({"content": saved["content"], "already_generated": False})
+
+
 @app.get("/api/market/<symbol>")
 @limiter.limit("30 per minute")
 def market(symbol):
