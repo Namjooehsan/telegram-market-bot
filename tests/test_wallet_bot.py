@@ -42,13 +42,10 @@ def test_wrong_key_is_detected_on_reopen(tmp_path, monkeypatch):
     store = WalletStore(db_path)
     store.add("100", "BTC", "bc1qpublicaddress")
 
-    # The running store intentionally retains its startup key. A restarted
-    # process (represented by a new store instance) must reject a wrong key.
+    # A restarted process must fail before polling or accepting new records.
     monkeypatch.setenv("WALLET_DATA_KEY", Fernet.generate_key().decode())
-    restarted_store = WalletStore(db_path)
     with pytest.raises(RuntimeError, match="does not match"):
-        restarted_store.list_for_user("100")
-
+        WalletStore(db_path)
 
 
 def test_store_limits_each_user_to_30_addresses(tmp_path, monkeypatch):
