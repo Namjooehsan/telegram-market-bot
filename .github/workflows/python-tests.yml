@@ -23,6 +23,6 @@ jobs:
       - name: Install requirements
         run: pip install -r requirements.txt
       - name: Compile application modules
-        run: python -m compileall -q app.py opportunity_research.py advertising miniapps
+        run: python -m compileall -q app.py opportunity_research.py advertising miniapps partnerships
       - name: Run tests
         run: pytest -q
