@@ -336,6 +336,7 @@ def draft_db():
     db_path = Path(DRAFT_DB_PATH)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(str(db_path), timeout=10)
+    connection.row_factory = sqlite3.Row
     connection.execute("""
         CREATE TABLE IF NOT EXISTS drafts (
             draft_id TEXT PRIMARY KEY,
