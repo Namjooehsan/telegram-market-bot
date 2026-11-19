@@ -229,3 +229,6 @@ def test_ideas_catalog_contains_demand_signals_and_no_income_guarantee():
     assert "Fiverr" in text
     assert "Circle" in text
     assert "تضمین فروش یا سود" in text
+    assert "اتوماسیون سفارش و پشتیبانی" in text
+    assert "میکرو‌نرم‌افزارهای تخصصی" in text
+    assert "تعهد پرداخت" in text
