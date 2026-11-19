@@ -37,6 +37,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", TELEGRAM_CHAT_ID).split(",") if x.strip()]
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "serchbestpriceforbtc_bot").strip().lstrip("@")
+MINIAPP_PUBLIC_URL = os.getenv("MINIAPP_PUBLIC_URL", "").strip().rstrip("/")
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 WEBHOOK_CONFIGURED = False
 ADMIN_IDS = {x.strip() for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") if x.strip()}
@@ -558,8 +559,27 @@ def create_miniapp_invoice_link(user_id, product_code):
             "SELECT status FROM miniapp_purchases WHERE user_id = ? AND product_code = ?",
             (str(user_id), product_code)
         ).fetchone()
+        pending = connection.execute(
+            """SELECT created_at FROM stars_orders
+            WHERE user_id = ? AND product_code = ? AND status = 'pending'
+            ORDER BY created_at DESC LIMIT 1""",
+            (str(user_id), product_code)
+        ).fetchone()
     if existing:
         return None
+    if pending:
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(pending[0])).total_seconds()
+        except ValueError:
+            age = 0
+        if age < 900:
+            return None
+        with draft_db() as connection:
+            connection.execute(
+                """UPDATE stars_orders SET status = 'expired'
+                WHERE user_id = ? AND product_code = ? AND status = 'pending'""",
+                (str(user_id), product_code)
+            )
     order = create_stars_order(user_id, product_code)
     if not order:
         return None
@@ -1468,6 +1488,14 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id,
                 "text": telegram_safe_text("ایده اختصاصی شما:\n\n" + idea)
+            })
+        elif product_code in MINIAPP_PRODUCT_PRICES:
+            telegram_call("sendMessage", {
+                "chat_id": chat_id,
+                "text": (
+                    "پرداخت Mini App با موفقیت ثبت شد. محصول به حساب تلگرامی شما متصل است. "
+                    "با /apps وارد NOVA Hub شو و ابزار خریداری‌شده را باز کن."
+                )
             })
         else:
             telegram_call("sendMessage", {
