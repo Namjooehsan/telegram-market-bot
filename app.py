@@ -46,6 +46,7 @@ ADMIN_IDS = {x.strip() for x in os.getenv("TELEGRAM_ADMIN_IDS", "").split(",") i
 BINANCE_BASE = os.getenv("BINANCE_BASE_URL", "https://api.binance.com")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_AUTH_FAILED = False
+OPENAI_LAST_SUCCESS = False
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 TRACKED_SYMBOLS = [x.strip().upper() for x in os.getenv(
@@ -151,7 +152,7 @@ def market_snapshot(symbol="BTCUSDT"):
 
 def openai_text(prompt, system_prompt, max_output_tokens=650):
     """Call the OpenAI Responses API, disabling repeated calls after auth failures."""
-    global OPENAI_AUTH_FAILED
+    global OPENAI_AUTH_FAILED, OPENAI_LAST_SUCCESS
     if not OPENAI_API_KEY or OPENAI_AUTH_FAILED:
         return None
     if not consume_ai_quota():
@@ -178,17 +179,22 @@ def openai_text(prompt, system_prompt, max_output_tokens=650):
         response.raise_for_status()
         payload = response.json()
         if payload.get("output_text"):
-            return payload["output_text"].strip()
-        chunks = []
-        for item in payload.get("output", []):
-            for part in item.get("content", []):
-                if part.get("type") == "output_text" and part.get("text"):
-                    chunks.append(part["text"])
-        return "\n".join(chunks).strip() or None
+            result = payload["output_text"].strip()
+        else:
+            chunks = []
+            for item in payload.get("output", []):
+                for part in item.get("content", []):
+                    if part.get("type") == "output_text" and part.get("text"):
+                        chunks.append(part["text"])
+            result = "\n".join(chunks).strip()
+        if result:
+            OPENAI_LAST_SUCCESS = True
+        return result or None
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response is not None else None
         if status_code in (401, 403):
             OPENAI_AUTH_FAILED = True
+            OPENAI_LAST_SUCCESS = False
             log.error(
                 "OpenAI authentication/permission failed (HTTP %s); AI calls are paused "
                 "until OPENAI_API_KEY is corrected and the service restarts.",
@@ -200,6 +206,16 @@ def openai_text(prompt, system_prompt, max_output_tokens=650):
     except Exception:
         log.exception("OpenAI analysis request failed")
         return None
+
+
+def ai_status_text():
+    if not OPENAI_API_KEY:
+        return "کلید تنظیم نشده"
+    if OPENAI_AUTH_FAILED:
+        return "احراز هویت/مجوز رد شده (401/403)؛ درخواست‌های AI متوقف‌اند"
+    if OPENAI_LAST_SUCCESS:
+        return "اتصال در آخرین درخواست موفق تأیید شده"
+    return "کلید ثبت شده؛ هنوز درخواست موفقی در این اجرا تأیید نشده"
 
 
 def ai_market_commentary(rows):
@@ -1858,7 +1874,8 @@ def telegram_webhook():
             for item in campaigns:
                 lines.append(
                     f"{item['campaign_id']} | {item['name']} | {item['status']} | "
-                    f"پیش‌نویس: {item['creatives'] or 0} | منتشرشده: {item['published'] or 0}"
+                    f"پیش‌نویس: {item['creatives'] or 0} | منتشرشده: {item['published'] or 0} | "
+                    f"ارسال موفق: {item['successful_deliveries'] or 0} | ورودی یکتا: {item['attributed_users'] or 0}"
                 )
             lines += ["", "فرمان‌ها: /adnew /adreport /adplatforms /adlangs"]
             telegram_call("sendMessage", {"chat_id": chat_id, "text": telegram_safe_text("\n".join(lines))})
@@ -1935,6 +1952,14 @@ def telegram_webhook():
             )
             if ai_ideas:
                 reply += "\n\nایده‌های اجرایی تولیدشده با هوش مصنوعی (نیازمند اعتبارسنجی):\n" + ai_ideas
+            elif not OPENAI_API_KEY:
+                reply += "\n\nهوش مصنوعی اجرا نشد: کلید API تنظیم نشده است."
+            elif OPENAI_AUTH_FAILED:
+                reply += "\n\nهوش مصنوعی اجرا نشد: سرویس OpenAI احراز هویت/مجوز را رد کرده است (401/403). کلید و دسترسی پروژه را در Railway بررسی و سرویس را پس از اصلاح راه‌اندازی مجدد کنید."
+            elif not signals:
+                reply += "\n\nهوش مصنوعی اجرا نشد: سیگنال تازه‌ای برای تحلیل وجود نداشت."
+            else:
+                reply += "\n\nهوش مصنوعی این بار خروجی نداد؛ محدودیت روزانه یا خطای موقت API را بررسی کنید."
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": telegram_safe_text(reply[:3900]),
                 "disable_web_page_preview": True
@@ -2087,7 +2112,7 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id,
                 "text": (
-                    f"سرویس: فعال\nهوش مصنوعی: {'کلید ثبت شده' if OPENAI_API_KEY else 'منتظر کلید'}"
+                    f"سرویس: فعال\nهوش مصنوعی: {ai_status_text()}"
                     f"\nمدل: {OPENAI_MODEL}\nزمان‌بندی تهران: {schedule}"
                     f"\nپرداخت Stars: {'تنظیم شده' if stars_product('premium_30d') else 'منتظر تعیین قیمت'}"
                     f"\nآدرس‌های حمایت: {'ثبت شده' if any([SUPPORT_BTC_ADDRESS, SUPPORT_BCH_ADDRESS, SUPPORT_XRP_ADDRESS, SUPPORT_ADA_ADDRESS]) else 'ثبت نشده'}"
