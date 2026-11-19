@@ -35,6 +35,11 @@ class WalletStore:
         return db
 
     def add(self, user_id: str, network: str, address: str, label: str = "") -> int:
+        # Bound storage growth and reduce abuse from repeated /add commands.
+        with self._connect() as db:
+            count = db.execute("SELECT COUNT(*) FROM watched_addresses WHERE telegram_user_id=?", (str(user_id),)).fetchone()[0]
+        if count >= 30:
+            raise ValueError("A maximum of 30 addresses is allowed per Telegram account")
         encrypted_address = self.fernet.encrypt(address.encode())
         encrypted_label = self.fernet.encrypt(label.encode())
         with self._connect() as db:
