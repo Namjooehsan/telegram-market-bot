@@ -1519,7 +1519,7 @@ def telegram_webhook():
                 "chat_id": chat_id,
                 "text": (
                     "ربات پایش بازار رمزارز\n"
-                    "/menu نمایش امکانات\n/price BTC قیمت و وضعیت بازار\n"
+                    "/menu نمایش امکانات\n/apps باز کردن فروشگاه ابزارهای NOVA\n/price BTC قیمت و وضعیت بازار\n"
                     "/whales پایش جهش حجم\n/ask پرسش تحلیلی ویژه\n"
                     "/idea ایده کسب‌وکار روز\n/quiz آزمون کوتاه\n"
                     "/riddle معما\n/joke سرگرمی\n"
@@ -1546,9 +1546,40 @@ def telegram_webhook():
                     "حمایت و پرداخت: /plans | /donate BTC 0.001 | /tx ID TXID | /support\n"
                     "سرگرمی: /quiz | /answer B | /riddle | /joke\n"
                     "اشتراک و پرداخت: /plans | /premium | /businessidea | /funpack | /support | /wallet | /paysupport\n"
+                    "سوپرابزار NOVA: /apps (۱۲ ابزار رایگان و محصولات حرفه‌ای)\n"
                     "مدیریت تبلیغات (مدیر): /ads | /adnew | /adreport | /adplatforms | /adlangs"
                 )
             })
+        elif command == "/apps":
+            chat_type = (message.get("chat") or {}).get("type", "")
+            public_base = MINIAPP_PUBLIC_URL or (
+                "https://" + os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+                if os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip() else ""
+            )
+            miniapp_url = public_base.rstrip("/") + "/miniapp" if public_base.startswith("https://") else ""
+            if chat_type != "private":
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "برای امنیت و پرداخت، NOVA Hub را از گفت‌وگوی خصوصی ربات باز کن."
+                })
+            elif miniapp_url:
+                keyboard = {"inline_keyboard": [[
+                    {"text": "🚀 باز کردن NOVA Hub", "web_app": {"url": miniapp_url}}
+                ]]}
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": (
+                        "به NOVA Hub خوش آمدی!\n"
+                        "۱۲ ابزار رایگان در ۶ حوزه به‌همراه محصولات حرفه‌ای در دسترس‌اند.\n"
+                        "برای خرید محصولات دیجیتال، پرداخت فقط از طریق Telegram Stars انجام می‌شود."
+                    ),
+                    "reply_markup": keyboard
+                })
+            else:
+                telegram_call("sendMessage", {
+                    "chat_id": chat_id,
+                    "text": "آدرس عمومی HTTPS برای Mini App هنوز تنظیم نشده است. مدیر باید MINIAPP_PUBLIC_URL را در Railway ثبت کند."
+                })
         elif command == "/joke":
             telegram_call("sendMessage", {"chat_id": chat_id, "text": random.choice(JOKES)})
         elif command == "/riddle":
@@ -1928,7 +1959,7 @@ def telegram_webhook():
             telegram_call("sendMessage", {
                 "chat_id": chat_id, "text": "درخواست رد شد." if rejected else "درخواست قابل رد پیدا نشد."
             })
-        elif not admin and command not in ("/start", "/help", "/menu", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/ideas", "/markets", "/opportunities", "/marketsearch", "/whalestatus", "/whalealerts", "/donate", "/tx", "/support", "/wallet", "/paysupport"):
+        elif not admin and command not in ("/start", "/help", "/menu", "/apps", "/plans", "/pay", "/paid", "/ask", "/whales", "/price", "/idea", "/quiz", "/answer", "/riddle", "/joke", "/premium", "/businessidea", "/funpack", "/ideas", "/markets", "/opportunities", "/marketsearch", "/whalestatus", "/whalealerts", "/donate", "/tx", "/support", "/wallet", "/paysupport"):
             return jsonify({"ok": True})
         elif command == "/draft" and admin:
             draft_id, body = create_draft()
