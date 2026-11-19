@@ -548,6 +548,34 @@ def send_stars_invoice(chat_id, user_id, product_code):
     return True
 
 
+def create_miniapp_invoice_link(user_id, product_code):
+    """Create a Telegram Stars invoice link for a verified Mini App user."""
+    product = stars_product(product_code)
+    if product_code not in MINIAPP_PRODUCT_PRICES or not product:
+        return None
+    with draft_db() as connection:
+        existing = connection.execute(
+            "SELECT status FROM miniapp_purchases WHERE user_id = ? AND product_code = ?",
+            (str(user_id), product_code)
+        ).fetchone()
+    if existing:
+        return None
+    order = create_stars_order(user_id, product_code)
+    if not order:
+        return None
+    payload, product = order
+    invoice_url = telegram_call("createInvoiceLink", {
+        "title": product["title"][:32],
+        "description": product["description"][:255],
+        "payload": payload,
+        "currency": "XTR",
+        "prices": [{"label": product["title"][:32], "amount": product["price"]}],
+    }, timeout=20)
+    if not isinstance(invoice_url, str) or not invoice_url.startswith("https://"):
+        raise RuntimeError("Telegram did not return a valid Stars invoice URL")
+    return {"invoice_url": invoice_url, "price": product["price"]}
+
+
 def stars_pre_checkout_is_valid(query):
     order = get_stars_order(query.get("invoice_payload", ""))
     sender_id = str((query.get("from") or {}).get("id", ""))
@@ -593,6 +621,13 @@ def complete_stars_payment(user_id, payment):
                 VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
                 expires_at = excluded.expires_at, granted_at = excluded.granted_at""",
                 (str(user_id), expires_at, now.isoformat())
+            )
+        elif row[1] in MINIAPP_PRODUCT_PRICES:
+            connection.execute(
+                """INSERT OR IGNORE INTO miniapp_purchases
+                (user_id, product_code, stars_amount, telegram_charge_id, purchased_at, status)
+                VALUES (?, ?, ?, ?, ?, 'purchased')""",
+                (str(user_id), row[1], row[2], charge_id, now.isoformat())
             )
     return row[1]
 
