@@ -5,4 +5,4 @@ python-dotenv==1.2.2
 gunicorn==23.0.0
 pytest==9.0.3
 APScheduler==3.11.0
-cryptography>=44,<47
+cryptography>=50,<51
