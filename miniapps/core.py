@@ -118,7 +118,10 @@ def verify_init_data(
     """Verify Telegram Mini App initData using Telegram's HMAC-SHA-256 scheme."""
     if not init_data or not bot_token or len(init_data) > 8192:
         return None
-    pairs = parse_qsl(init_data, keep_blank_values=True, strict_parsing=True)
+    try:
+        pairs = parse_qsl(init_data, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        return None
     data = {}
     for key, value in pairs:
         if key in data:
