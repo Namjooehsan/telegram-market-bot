@@ -265,12 +265,16 @@ def handle_message(message):
         if str(user_id) in AWAITING_REPORT:
             AWAITING_REPORT.discard(str(user_id))
             report_id = STORE.add_report(user_id, user.get("username"), text)
+            delivered = 0
             for admin_id in ADMIN_IDS:
                 try:
-                    send(int(admin_id), f"📨 <b>گزارش جدید #{report_id}</b>\nکاربر: <code>{user_id}</code>\n{html.escape(text[:1800])}")
+                    send(int(admin_id), f"📨 <b>گزارش جدید #{report_id}</b>\\nکاربر: <code>{user_id}</code>\\n{html.escape(text[:1800])}")
+                    delivered += 1
                 except Exception:
                     log.exception("Support report delivery failed")
-            return send(chat_id, "✅ گزارش ثبت شد. ممنون؛ به مدیر سامانه ارسال شد.")
+            if delivered:
+                return send(chat_id, "✅ گزارش ثبت و برای مدیر سامانه ارسال شد.")
+            return send(chat_id, "✅ گزارش ذخیره شد؛ اما فهرست مدیران گیرنده هنوز تنظیم نشده است.")
         send(chat_id, private_assistant_answer(text))
 
 
@@ -281,6 +285,19 @@ def main():
     me = telegram("getMe")
     BOT_ID = me.get("id")
     log.info("NOVA Help started as @%s", me.get("username", "unknown"))
+    telegram("setMyCommands", {"commands": [
+        {"command": "start", "description": "شروع و نمایش منوی اصلی"},
+        {"command": "menu", "description": "نمایش منوی اصلی"},
+        {"command": "help", "description": "راهنما و امکانات"},
+        {"command": "rules", "description": "مشاهده قوانین گروه"},
+        {"command": "id", "description": "نمایش شناسه گروه و کاربر"},
+        {"command": "warn", "description": "اخطار به کاربر (با پاسخ به پیام)"},
+        {"command": "mute", "description": "محدودسازی کاربر (با پاسخ به پیام)"},
+        {"command": "unmute", "description": "رفع محدودیت کاربر (با پاسخ به پیام)"},
+        {"command": "ban", "description": "مسدودسازی کاربر (با پاسخ به پیام)"},
+        {"command": "unban", "description": "رفع مسدودیت با شناسه کاربر"},
+        {"command": "setrules", "description": "تنظیم قوانین گروه"},
+    ]})
     offset = None
     while True:
         try:
