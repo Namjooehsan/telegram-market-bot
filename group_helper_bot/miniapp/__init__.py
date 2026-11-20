@@ -1,0 +1,1 @@
+"""NOVA Help Mini App static host."""
