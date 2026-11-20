@@ -638,22 +638,31 @@ def stars_pre_checkout_is_valid(query):
                 or query.get("total_amount") != row["stars_amount"]):
             return False
 
-        if row["status"] == "checkout_approved":
-            return True
-        if row["status"] != "pending":
-            return False
-
         if row["product_code"] in MINIAPP_PRODUCT_PRICES:
+            purchase = connection.execute(
+                "SELECT 1 FROM miniapp_purchases WHERE user_id = ? AND product_code = ?",
+                (sender_id, row["product_code"])
+            ).fetchone()
+            if purchase:
+                return False
             try:
                 age = (now - datetime.fromisoformat(row["created_at"])).total_seconds()
             except (TypeError, ValueError):
                 return False
             if age > 900:
                 connection.execute(
-                    "UPDATE stars_orders SET status = 'expired' WHERE payload = ? AND status = 'pending'",
+                    """UPDATE stars_orders SET status = 'expired'
+                    WHERE payload = ? AND status IN ('pending', 'checkout_approved')""",
                     (payload,)
                 )
                 return False
+
+        if row["status"] == "checkout_approved":
+            return True
+        if row["status"] != "pending":
+            return False
+
+        if row["product_code"] in MINIAPP_PRODUCT_PRICES:
             stale_before = (now - timedelta(seconds=900)).isoformat()
             active_checkout = connection.execute(
                 """SELECT 1 FROM stars_orders
