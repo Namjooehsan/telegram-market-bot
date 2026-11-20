@@ -1,0 +1,33 @@
+name: NOVA Help tests
+
+on:
+  pull_request:
+    paths:
+      - "group_helper_bot/**"
+      - "tests/test_group_helper_bot.py"
+      - ".github/workflows/nova-help-tests.yml"
+      - "requirements.txt"
+  push:
+    branches: [main]
+    paths:
+      - "group_helper_bot/**"
+      - "tests/test_group_helper_bot.py"
+      - ".github/workflows/nova-help-tests.yml"
+      - "requirements.txt"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Compile NOVA Help modules
+        run: python -m compileall -q group_helper_bot tests/test_group_helper_bot.py
+      - name: Run NOVA Help tests
+        run: pytest -q tests/test_group_helper_bot.py
