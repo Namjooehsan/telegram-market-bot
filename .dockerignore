@@ -1,0 +1,32 @@
+# Never send local credentials or runtime state into Docker build context.
+.env
+.env.*
+!.env.example
+
+# Git metadata and local tooling.
+.git
+.github
+.venv
+venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Local databases, backups, logs, and generated artifacts.
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.log
+*.bak
+*.tmp
+
+# Editor and operating-system files.
+.DS_Store
+.idea
+.vscode
