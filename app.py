@@ -654,11 +654,21 @@ def stars_pre_checkout_is_valid(query):
                     (payload,)
                 )
                 return False
+            stale_before = (now - timedelta(seconds=900)).isoformat()
+            active_checkout = connection.execute(
+                """SELECT 1 FROM stars_orders
+                WHERE user_id = ? AND product_code = ? AND payload != ?
+                  AND status = 'checkout_approved' AND created_at > ?
+                LIMIT 1""",
+                (sender_id, row["product_code"], payload, stale_before)
+            ).fetchone()
+            if active_checkout:
+                return False
             connection.execute(
                 """UPDATE stars_orders SET status = 'expired'
                 WHERE user_id = ? AND product_code = ? AND payload != ?
-                  AND status = 'checkout_approved'""",
-                (sender_id, row["product_code"], payload)
+                  AND status IN ('pending', 'checkout_approved') AND created_at <= ?""",
+                (sender_id, row["product_code"], payload, stale_before)
             )
 
         cursor = connection.execute(
