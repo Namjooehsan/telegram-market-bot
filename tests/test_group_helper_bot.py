@@ -51,5 +51,5 @@ def test_colorful_miniapp_has_functional_telegram_actions():
     source = miniapp.read_text(encoding="utf-8")
     for action in ("assistant", "group", "guide", "report", "status", "commands"):
         assert f'data-action="{action}"' in source
-    assert "Telegram.WebApp" in source
+    assert "window.Telegram" in source
     assert "sendData" in source
