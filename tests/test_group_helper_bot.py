@@ -1,4 +1,7 @@
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from group_helper_bot.store import GroupStore
 from group_helper_bot.ui import WELCOME, GUIDE, GROUP_GUIDE, home_keyboard
