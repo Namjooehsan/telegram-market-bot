@@ -2,6 +2,14 @@
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/id_rsa
+**/id_ed25519
+**/*credentials*.json
+**/*service-account*.json
 
 # Git metadata and local tooling.
 .git
@@ -9,6 +17,7 @@
 .venv
 venv
 __pycache__
+**/__pycache__
 .pytest_cache
 .mypy_cache
 .ruff_cache
