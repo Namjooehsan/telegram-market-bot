@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from group_helper_bot.store import GroupStore
 from group_helper_bot.ui import WELCOME, GUIDE, GROUP_GUIDE, home_keyboard
 
@@ -35,3 +37,19 @@ def test_support_reports_are_saved(tmp_path):
     store = GroupStore(str(tmp_path / "groups.sqlite3"))
     report_id = store.add_report("123", "test_user", "دکمه راهنما کار نمی‌کند")
     assert report_id == 1
+
+
+def test_home_menu_adds_miniapp_only_for_https_url(monkeypatch):
+    monkeypatch.setenv("HELP_MINIAPP_URL", "http://insecure.example")
+    assert not any("web_app" in button for row in home_keyboard()["inline_keyboard"] for button in row)
+    monkeypatch.setenv("HELP_MINIAPP_URL", "https://help-miniapp.example")
+    assert any("web_app" in button for row in home_keyboard()["inline_keyboard"] for button in row)
+
+
+def test_colorful_miniapp_has_functional_telegram_actions():
+    miniapp = Path(__file__).resolve().parents[1] / "group_helper_bot" / "miniapp" / "index.html"
+    source = miniapp.read_text(encoding="utf-8")
+    for action in ("assistant", "group", "guide", "report", "status", "commands"):
+        assert f'data-action="{action}"' in source
+    assert "Telegram.WebApp" in source
+    assert "sendData" in source
