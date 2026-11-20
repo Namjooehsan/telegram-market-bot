@@ -194,7 +194,7 @@ def handle_web_app_data(message):
         send(chat_id, "⚠️ داده داشبورد قابل‌خواندن نبود. /menu را دوباره بزن.")
         return True
     if action == "assistant":
-        send(chat_id, "🧠 <b>دستیار هوشمند</b>\\nسؤالت را همین‌جا بنویس تا بررسی کنم.")
+        send(chat_id, "🧠 <b>دستیار هوشمند</b>\nسؤالت را همین‌جا بنویس تا بررسی کنم.")
     elif action == "group":
         send(chat_id, GROUP_GUIDE, admin_keyboard())
     elif action == "guide":
@@ -203,7 +203,7 @@ def handle_web_app_data(message):
         AWAITING_REPORT.add(str(user_id))
         send(chat_id, "📨 مشکل یا پیشنهادت را در پیام بعدی بنویس.")
     elif action == "status":
-        send(chat_id, "🟢 <b>وضعیت NOVA Help</b>\\nربات پاسخ‌گوست. فعال بودن AI به اعتبار کلید API وابسته است.")
+        send(chat_id, "🟢 <b>وضعیت NOVA Help</b>\nربات پاسخ‌گوست. فعال بودن AI به اعتبار کلید API وابسته است.")
     elif action == "commands":
         send(chat_id, GROUP_GUIDE)
     else:
@@ -268,7 +268,7 @@ def handle_message(message):
             delivered = 0
             for admin_id in ADMIN_IDS:
                 try:
-                    send(int(admin_id), f"📨 <b>گزارش جدید #{report_id}</b>\\nکاربر: <code>{user_id}</code>\\n{html.escape(text[:1800])}")
+                    send(int(admin_id), f"📨 <b>گزارش جدید #{report_id}</b>\nکاربر: <code>{user_id}</code>\n{html.escape(text[:1800])}")
                     delivered += 1
                 except Exception:
                     log.exception("Support report delivery failed")
