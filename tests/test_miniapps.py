@@ -184,6 +184,26 @@ def test_miniapp_precheckout_reserves_order_and_is_idempotent(tmp_path, monkeypa
     assert order["status"] == "checkout_approved"
 
 
+def test_miniapp_precheckout_allows_only_one_active_checkout(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "single-checkout.sqlite3"))
+    monkeypatch.setattr(market_app, "MINIAPP_AD_CAMPAIGN_STARS", 99)
+    first_payload, _ = market_app.create_stars_order("12345", "miniapp_ad_campaign")
+    second_payload, _ = market_app.create_stars_order("12345", "miniapp_ad_campaign")
+
+    def query(payload):
+        return {
+            "invoice_payload": payload,
+            "from": {"id": 12345},
+            "currency": "XTR",
+            "total_amount": 99,
+        }
+
+    assert market_app.stars_pre_checkout_is_valid(query(first_payload)) is True
+    assert market_app.stars_pre_checkout_is_valid(query(second_payload)) is False
+    assert market_app.get_stars_order(first_payload)["status"] == "checkout_approved"
+    assert market_app.get_stars_order(second_payload)["status"] == "pending"
+
+
 def test_miniapp_precheckout_rejects_wrong_owner_and_amount(tmp_path, monkeypatch):
     monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "invalid-precheckout.sqlite3"))
     monkeypatch.setattr(market_app, "MINIAPP_AD_CAMPAIGN_STARS", 99)
