@@ -1,4 +1,5 @@
 """Telegram menu presentation helpers for NOVA Group Helper."""
+import os
 
 MAIN_MENU = {
     "inline_keyboard": [
@@ -48,8 +49,14 @@ GROUP_GUIDE = (
     "<code>/id</code> — نمایش شناسه گروه و کاربر"
 )
 
+
 def home_keyboard():
-    return MAIN_MENU
+    keyboard = [list(row) for row in MAIN_MENU["inline_keyboard"]]
+    miniapp_url = os.getenv("HELP_MINIAPP_URL", "").strip()
+    if miniapp_url.startswith("https://"):
+        keyboard.insert(0, [{"text": "✨ باز کردن داشبورد رنگی NOVA", "web_app": {"url": miniapp_url}}])
+    return {"inline_keyboard": keyboard}
+
 
 def admin_keyboard():
     return ADMIN_MENU
