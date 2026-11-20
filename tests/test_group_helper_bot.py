@@ -10,7 +10,7 @@ def test_home_menu_has_all_primary_sections():
     assert any("راهنما" in label for label in labels)
     assert any("گزارش" in label for label in labels)
     assert "NOVA Help" in WELCOME
-    assert "NOVA" in GUIDE
+    assert "راهنمای سریع" in GUIDE
     assert "مدیران" in GROUP_GUIDE
 
 
