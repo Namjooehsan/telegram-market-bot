@@ -553,61 +553,120 @@ def send_stars_invoice(chat_id, user_id, product_code):
 
 
 def create_miniapp_invoice_link(user_id, product_code):
-    """Create a Telegram Stars invoice link for a verified Mini App user."""
+    """Create one active Stars invoice per user/product using an atomic SQLite lock."""
     product = stars_product(product_code)
     if product_code not in MINIAPP_PRODUCT_PRICES or not product:
         return None
+
+    user_id = str(user_id)
+    payload = "S" + uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
     with draft_db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         existing = connection.execute(
-            "SELECT status FROM miniapp_purchases WHERE user_id = ? AND product_code = ?",
-            (str(user_id), product_code)
+            "SELECT 1 FROM miniapp_purchases WHERE user_id = ? AND product_code = ?",
+            (user_id, product_code)
         ).fetchone()
-        pending = connection.execute(
-            """SELECT created_at FROM stars_orders
-            WHERE user_id = ? AND product_code = ? AND status = 'pending'
-            ORDER BY created_at DESC LIMIT 1""",
-            (str(user_id), product_code)
-        ).fetchone()
-    if existing:
-        return None
-    if pending:
-        try:
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(pending[0])).total_seconds()
-        except ValueError:
-            age = 0
-        if age < 900:
+        if existing:
             return None
-        with draft_db() as connection:
+
+        pending = connection.execute(
+            """SELECT payload, created_at FROM stars_orders
+            WHERE user_id = ? AND product_code = ?
+              AND status IN ('pending', 'checkout_approved')
+            ORDER BY created_at DESC LIMIT 1""",
+            (user_id, product_code)
+        ).fetchone()
+        if pending:
+            try:
+                age = (now - datetime.fromisoformat(pending["created_at"])).total_seconds()
+            except (TypeError, ValueError):
+                age = 0
+            if age < 900:
+                return None
             connection.execute(
                 """UPDATE stars_orders SET status = 'expired'
-                WHERE user_id = ? AND product_code = ? AND status = 'pending'""",
-                (str(user_id), product_code)
+                WHERE user_id = ? AND product_code = ?
+                  AND status IN ('pending', 'checkout_approved')""",
+                (user_id, product_code)
             )
-    order = create_stars_order(user_id, product_code)
-    if not order:
-        return None
-    payload, product = order
-    invoice_url = telegram_call("createInvoiceLink", {
-        "title": product["title"][:32],
-        "description": product["description"][:255],
-        "payload": payload,
-        "currency": "XTR",
-        "prices": [{"label": product["title"][:32], "amount": product["price"]}],
-    }, timeout=20)
-    if not isinstance(invoice_url, str) or not invoice_url.startswith("https://"):
-        raise RuntimeError("Telegram did not return a valid Stars invoice URL")
+
+        connection.execute(
+            """INSERT INTO stars_orders
+            (payload, user_id, product_code, stars_amount, created_at)
+            VALUES (?, ?, ?, ?, ?)""",
+            (payload, user_id, product_code, product["price"], now.isoformat())
+        )
+
+    AD_CENTER.bind_order_to_user(user_id, payload)
+    try:
+        invoice_url = telegram_call("createInvoiceLink", {
+            "title": product["title"][:32],
+            "description": product["description"][:255],
+            "payload": payload,
+            "currency": "XTR",
+            "prices": [{"label": product["title"][:32], "amount": product["price"]}],
+        }, timeout=20)
+        if not isinstance(invoice_url, str) or not invoice_url.startswith("https://"):
+            raise RuntimeError("Telegram did not return a valid Stars invoice URL")
+    except Exception:
+        with draft_db() as connection:
+            connection.execute(
+                """UPDATE stars_orders SET status = 'failed'
+                WHERE payload = ? AND status = 'pending'""",
+                (payload,)
+            )
+        raise
     return {"invoice_url": invoice_url, "price": product["price"]}
 
 
 def stars_pre_checkout_is_valid(query):
-    order = get_stars_order(query.get("invoice_payload", ""))
+    payload = query.get("invoice_payload", "")
     sender_id = str((query.get("from") or {}).get("id", ""))
-    return bool(
-        order and order["status"] == "pending"
-        and order["user_id"] == sender_id
-        and query.get("currency") == "XTR"
-        and query.get("total_amount") == order["stars_amount"]
-    )
+    if not payload or not sender_id or query.get("currency") != "XTR":
+        return False
+
+    now = datetime.now(timezone.utc)
+    with draft_db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            """SELECT user_id, product_code, stars_amount, status, created_at
+            FROM stars_orders WHERE payload = ?""",
+            (payload,)
+        ).fetchone()
+        if (not row or row["user_id"] != sender_id
+                or query.get("total_amount") != row["stars_amount"]):
+            return False
+
+        if row["status"] == "checkout_approved":
+            return True
+        if row["status"] != "pending":
+            return False
+
+        if row["product_code"] in MINIAPP_PRODUCT_PRICES:
+            try:
+                age = (now - datetime.fromisoformat(row["created_at"])).total_seconds()
+            except (TypeError, ValueError):
+                return False
+            if age > 900:
+                connection.execute(
+                    "UPDATE stars_orders SET status = 'expired' WHERE payload = ? AND status = 'pending'",
+                    (payload,)
+                )
+                return False
+            connection.execute(
+                """UPDATE stars_orders SET status = 'expired'
+                WHERE user_id = ? AND product_code = ? AND payload != ?
+                  AND status = 'checkout_approved'""",
+                (sender_id, row["product_code"], payload)
+            )
+
+        cursor = connection.execute(
+            """UPDATE stars_orders SET status = 'checkout_approved'
+            WHERE payload = ? AND status = 'pending'""",
+            (payload,)
+        )
+        return cursor.rowcount == 1
 
 
 def complete_stars_payment(user_id, payment):
@@ -617,27 +676,34 @@ def complete_stars_payment(user_id, payment):
         return None
     now = datetime.now(timezone.utc)
     with draft_db() as connection:
+        connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
             """SELECT user_id, product_code, stars_amount, status
             FROM stars_orders WHERE payload = ?""", (payload,)
         ).fetchone()
-        if (not row or row[0] != str(user_id) or row[3] != "pending"
-                or row[2] != payment.get("total_amount")):
+        if (not row or row["user_id"] != str(user_id)
+                or row["status"] not in ("pending", "checkout_approved")
+                or row["stars_amount"] != payment.get("total_amount")):
             return None
-        cursor = connection.execute(
-            """UPDATE stars_orders SET status = 'paid',
-            telegram_charge_id = ?, paid_at = ?
-            WHERE payload = ? AND status = 'pending'""",
-            (charge_id, now.isoformat(), payload)
-        )
+        try:
+            cursor = connection.execute(
+                """UPDATE stars_orders SET status = 'paid',
+                telegram_charge_id = ?, paid_at = ?
+                WHERE payload = ? AND status IN ('pending', 'checkout_approved')
+                  AND telegram_charge_id IS NULL""",
+                (charge_id, now.isoformat(), payload)
+            )
+        except sqlite3.IntegrityError:
+            return None
         if cursor.rowcount != 1:
             return None
-        if row[1] == "premium_30d":
+        if row["product_code"] == "premium_30d":
             current = connection.execute(
                 "SELECT expires_at FROM premium_members WHERE user_id = ?",
                 (str(user_id),)
             ).fetchone()
-            base = datetime.fromisoformat(current[0]) if current and datetime.fromisoformat(current[0]) > now else now
+            current_expiry = datetime.fromisoformat(current["expires_at"]) if current else now
+            base = current_expiry if current_expiry > now else now
             expires_at = (base + timedelta(days=PREMIUM_DURATION_DAYS)).isoformat()
             connection.execute(
                 """INSERT INTO premium_members (user_id, expires_at, granted_at)
@@ -645,14 +711,14 @@ def complete_stars_payment(user_id, payment):
                 expires_at = excluded.expires_at, granted_at = excluded.granted_at""",
                 (str(user_id), expires_at, now.isoformat())
             )
-        elif row[1] in MINIAPP_PRODUCT_PRICES:
+        elif row["product_code"] in MINIAPP_PRODUCT_PRICES:
             connection.execute(
                 """INSERT OR IGNORE INTO miniapp_purchases
                 (user_id, product_code, stars_amount, telegram_charge_id, purchased_at, status)
                 VALUES (?, ?, ?, ?, ?, 'purchased')""",
-                (str(user_id), row[1], row[2], charge_id, now.isoformat())
+                (str(user_id), row["product_code"], row["stars_amount"], charge_id, now.isoformat())
             )
-    return row[1]
+    return row["product_code"]
 
 
 def wallet_address_for_asset(asset):
