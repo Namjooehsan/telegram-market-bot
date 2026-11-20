@@ -1,5 +1,6 @@
 """Standalone Telegram polling worker for NOVA Help."""
 import html
+import json
 import logging
 import os
 import time
@@ -179,13 +180,45 @@ def handle_callback(callback):
     return send(chat_id, "این گزینه هنوز تعریف نشده است. /menu را بزن.")
 
 
+def handle_web_app_data(message):
+    raw = (message.get("web_app_data") or {}).get("data")
+    if not raw:
+        return False
+    chat_id = message.get("chat", {}).get("id")
+    user_id = message.get("from", {}).get("id")
+    if not chat_id or not user_id:
+        return True
+    try:
+        action = json.loads(raw).get("action", "")
+    except (TypeError, ValueError):
+        send(chat_id, "⚠️ داده داشبورد قابل‌خواندن نبود. /menu را دوباره بزن.")
+        return True
+    if action == "assistant":
+        send(chat_id, "🧠 <b>دستیار هوشمند</b>\\nسؤالت را همین‌جا بنویس تا بررسی کنم.")
+    elif action == "group":
+        send(chat_id, GROUP_GUIDE, admin_keyboard())
+    elif action == "guide":
+        send(chat_id, GUIDE, home_keyboard())
+    elif action == "report":
+        AWAITING_REPORT.add(str(user_id))
+        send(chat_id, "📨 مشکل یا پیشنهادت را در پیام بعدی بنویس.")
+    elif action == "status":
+        send(chat_id, "🟢 <b>وضعیت NOVA Help</b>\\nربات پاسخ‌گوست. فعال بودن AI به اعتبار کلید API وابسته است.")
+    elif action == "commands":
+        send(chat_id, GROUP_GUIDE)
+    else:
+        send(chat_id, "این ابزار هنوز فعال نشده است.")
+    return True
+
 def handle_message(message):
     chat = message.get("chat", {})
     user = message.get("from", {})
     chat_id, user_id = chat.get("id"), user.get("id")
-    text = (message.get("text") or "").strip()
     if not chat_id or not user_id:
         return
+    if handle_web_app_data(message):
+        return
+    text = (message.get("text") or "").strip()
     if message.get("new_chat_members"):
         if BOT_ID and any(member.get("id") == BOT_ID for member in message["new_chat_members"]):
             send(chat_id, "✨ سلام! من NOVA Help هستم. برای مدیریت گروه، دسترسی مدیر لازم دارم. /help")
