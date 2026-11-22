@@ -232,3 +232,48 @@ def test_ideas_catalog_contains_demand_signals_and_no_income_guarantee():
     assert "اتوماسیون سفارش و پشتیبانی" in text
     assert "میکرو‌نرم‌افزارهای تخصصی" in text
     assert "تعهد پرداخت" in text
+
+
+def test_approved_report_delivery_retries_only_failed_destinations(tmp_path, monkeypatch):
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "delivery.sqlite3"))
+    monkeypatch.setattr(market_app, "TELEGRAM_CHAT_IDS", ["@telegram_a", "@telegram_b"])
+    monkeypatch.setattr(market_app, "BUFFER_API_KEY", "test-buffer-key")
+    telegram_calls = []
+    monkeypatch.setattr(
+        market_app,
+        "telegram_call",
+        lambda method, payload: telegram_calls.append(payload["chat_id"]) or {"message_id": len(telegram_calls)}
+    )
+
+    class FakeBuffer:
+        attempts = {"buffer-a": 0, "buffer-b": 0}
+
+        def __init__(self, token):
+            assert token == "test-buffer-key"
+
+        def list_channels(self):
+            return [
+                {"id": "buffer-a", "name": "Page A", "isDisconnected": False, "isLocked": False, "isQueuePaused": False},
+                {"id": "buffer-b", "name": "Page B", "isDisconnected": False, "isLocked": False, "isQueuePaused": False},
+            ]
+
+        def create_post(self, channel_id, body):
+            self.attempts[channel_id] += 1
+            if channel_id == "buffer-b" and self.attempts[channel_id] == 1:
+                raise RuntimeError("temporary Buffer failure")
+            return {"id": "post-" + channel_id}
+
+    monkeypatch.setattr(market_app, "BufferClient", FakeBuffer)
+
+    first = market_app.deliver_approved_draft("draft-buffer-retry", "sample report")
+    assert first["telegram_sent"] == 2
+    assert first["buffer_sent"] == 1
+    assert len(first["failed"]) == 1
+    assert telegram_calls == ["@telegram_a", "@telegram_b"]
+
+    second = market_app.deliver_approved_draft("draft-buffer-retry", "sample report")
+    assert second["telegram_sent"] == 0
+    assert second["buffer_sent"] == 1
+    assert second["failed"] == []
+    assert telegram_calls == ["@telegram_a", "@telegram_b"]
+    assert FakeBuffer.attempts == {"buffer-a": 1, "buffer-b": 2}

@@ -13,6 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 import requests
 from opportunity_research import OpportunityResearcher, get_market_universe, format_market_universe, format_opportunity_digest
+from buffer_integration import BufferClient
 from advertising import AdvertisingCenter, LANGUAGES, PLATFORMS
 from miniapps.core import FREE_APPS, PAID_PRODUCTS, FREE_CATEGORIES, verify_init_data, paid_products_with_prices, build_paid_prompt
 from partnerships.research import PartnerResearcher
@@ -36,6 +37,7 @@ PARTNER_RESEARCHER = PartnerResearcher(DRAFT_DB_PATH)
 WHALE_TRACKER_API_URL = os.getenv("WHALE_TRACKER_API_URL", "https://whale-tracker-production-1a5d75ec.up.railway.app").rstrip("/")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+BUFFER_API_KEY = os.getenv("BUFFER_API_KEY", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", TELEGRAM_CHAT_ID).split(",") if x.strip()]
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "serchbestpriceforbtc_bot").strip().lstrip("@")
@@ -365,6 +367,19 @@ def draft_db():
         )
     """)
     connection.execute("""
+        CREATE TABLE IF NOT EXISTS draft_deliveries (
+            draft_id TEXT NOT NULL,
+            destination_key TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            destination_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            remote_id TEXT,
+            error TEXT,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (draft_id, destination_key)
+        )
+    """)
+    connection.execute("""
         CREATE TABLE IF NOT EXISTS premium_members (
             user_id TEXT PRIMARY KEY,
             expires_at TEXT NOT NULL,
@@ -448,6 +463,84 @@ def get_draft(draft_id):
 def delete_draft(draft_id):
     with draft_db() as connection:
         connection.execute("DELETE FROM drafts WHERE draft_id = ?", (draft_id,))
+        connection.execute("DELETE FROM draft_deliveries WHERE draft_id = ?", (draft_id,))
+
+
+def draft_delivery_sent(draft_id, destination_key):
+    with draft_db() as connection:
+        row = connection.execute(
+            "SELECT status FROM draft_deliveries WHERE draft_id = ? AND destination_key = ?",
+            (draft_id, destination_key)
+        ).fetchone()
+    return bool(row and row[0] == "sent")
+
+
+def record_draft_delivery(draft_id, destination_key, platform, destination_name, status, remote_id=None, error=None):
+    with draft_db() as connection:
+        connection.execute("""
+            INSERT INTO draft_deliveries
+                (draft_id, destination_key, platform, destination_name, status, remote_id, error, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(draft_id, destination_key) DO UPDATE SET
+                status=excluded.status, remote_id=excluded.remote_id,
+                error=excluded.error, updated_at=excluded.updated_at
+        """, (draft_id, destination_key, platform, destination_name, status,
+              remote_id, (str(error)[:300] if error else None), datetime.now(timezone.utc).isoformat()))
+
+
+def deliver_approved_draft(draft_id, body):
+    """Deliver approved reports to Telegram and Buffer, retrying only failed destinations."""
+    result = {"telegram_sent": 0, "buffer_sent": 0, "failed": []}
+    if not TELEGRAM_CHAT_IDS:
+        result["failed"].append("Telegram: no destinations configured")
+    for destination in TELEGRAM_CHAT_IDS:
+        key = "telegram:" + destination
+        if draft_delivery_sent(draft_id, key):
+            continue
+        try:
+            sent = telegram_call("sendMessage", {
+                "chat_id": destination,
+                "text": telegram_safe_text("گزارش تأییدشده\n\n" + body),
+                "disable_web_page_preview": True
+            })
+            record_draft_delivery(draft_id, key, "telegram", destination, "sent",
+                                  str((sent or {}).get("message_id", "")) or None)
+            result["telegram_sent"] += 1
+        except Exception as exc:
+            record_draft_delivery(draft_id, key, "telegram", destination, "failed", error=exc)
+            result["failed"].append("Telegram " + destination + ": " + str(exc)[:120])
+
+    if not BUFFER_API_KEY:
+        result["failed"].append("Buffer: API key is not configured")
+    else:
+        try:
+            buffer_client = BufferClient(BUFFER_API_KEY)
+            channels = buffer_client.list_channels()
+            active_channels = [ch for ch in channels if not ch.get("isDisconnected") and not ch.get("isLocked")]
+            if not active_channels:
+                result["failed"].append("Buffer: no connected, usable channels were found")
+            for channel in active_channels:
+                channel_id = str(channel["id"])
+                channel_name = str(channel.get("displayName") or channel.get("name") or channel_id)
+                key = "buffer:" + channel_id
+                if draft_delivery_sent(draft_id, key):
+                    continue
+                if channel.get("isQueuePaused"):
+                    error = "Buffer queue is paused for this channel"
+                    record_draft_delivery(draft_id, key, "buffer", channel_name, "failed", error=error)
+                    result["failed"].append("Buffer " + channel_name + ": " + error)
+                    continue
+                try:
+                    post = buffer_client.create_post(channel_id, body)
+                    record_draft_delivery(draft_id, key, "buffer", channel_name, "sent", post.get("id"))
+                    result["buffer_sent"] += 1
+                except Exception as exc:
+                    record_draft_delivery(draft_id, key, "buffer", channel_name, "failed", error=exc)
+                    result["failed"].append("Buffer " + channel_name + ": " + str(exc)[:120])
+        except Exception as exc:
+            log.exception("Buffer channel discovery failed for an approved report")
+            result["failed"].append("Buffer: " + str(exc)[:160])
+    return result
 
 
 def consume_ai_quota():
@@ -2192,6 +2285,26 @@ def telegram_webhook():
                 "chat_id": chat_id,
                 "text": "هشدار جهش حجم (نه اثبات فعالیت نهنگ):\n" + body
             })
+        elif command == "/bufferstatus" and admin:
+            if not BUFFER_API_KEY:
+                body = "کلید Buffer در Railway تنظیم نشده است."
+            else:
+                try:
+                    channels = BufferClient(BUFFER_API_KEY).list_channels()
+                    body = "کانال‌های Buffer متصل: " + str(len(channels)) + "\n" + "\n".join(
+                        "- " + str(ch.get("displayName") or ch.get("name") or ch["id"]) +
+                        " | " + str(ch.get("service") or "نامشخص") + " | " +
+                        ("قطع اتصال" if ch.get("isDisconnected") else
+                         "قفل‌شده" if ch.get("isLocked") else
+                         "صف متوقف" if ch.get("isQueuePaused") else "آماده صف")
+                        for ch in channels
+                    )
+                    if not channels:
+                        body += "\nهیچ کانالی به سازمان Buffer متصل نیست."
+                except Exception as exc:
+                    log.exception("Buffer status check failed")
+                    body = "اتصال Buffer ناموفق بود: " + str(exc)[:300]
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": body[:3900]})
         elif command == "/status" and admin:
             schedule = "فعال" if scheduler and scheduler.running else "غیرفعال"
             telegram_call("sendMessage", {
@@ -2335,9 +2448,26 @@ def telegram_callback():
         if not draft:
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "پیش‌نویس منقضی یا ناموجود است"})
         elif action == "approve":
-            send_telegram("گزارش تأییدشده\n\n" + draft["text"])
-            telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "گزارش منتشر شد"})
-            delete_draft(draft_id)
+            delivery = deliver_approved_draft(draft_id, draft["text"])
+            if delivery["failed"]:
+                telegram_call("answerCallbackQuery", {
+                    "callback_query_id": callback_id,
+                    "text": "ارسال ناقص؛ تلگرام: " + str(delivery["telegram_sent"]) +
+                            "، Buffer: " + str(delivery["buffer_sent"]) +
+                            "، مقصدهای ناموفق: " + str(len(delivery["failed"])) +
+                            ". برای تلاش مجدد دوباره تأیید کنید."
+                })
+                telegram_call("sendMessage", {
+                    "chat_id": str(user_id),
+                    "text": "جزئیات خطاهای انتشار:\n" + "\n".join(delivery["failed"])[:3500]
+                })
+            else:
+                telegram_call("answerCallbackQuery", {
+                    "callback_query_id": callback_id,
+                    "text": "گزارش ارسال شد؛ تلگرام " + str(delivery["telegram_sent"]) +
+                            "، Buffer " + str(delivery["buffer_sent"]) + " کانال"
+                })
+                delete_draft(draft_id)
         elif action == "reject":
             telegram_call("answerCallbackQuery", {"callback_query_id": callback_id, "text": "گزارش رد شد"})
             delete_draft(draft_id)
