@@ -37,7 +37,7 @@ PARTNER_RESEARCHER = PartnerResearcher(DRAFT_DB_PATH)
 WHALE_TRACKER_API_URL = os.getenv("WHALE_TRACKER_API_URL", "https://whale-tracker-production-1a5d75ec.up.railway.app").rstrip("/")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-BUFFER_API_KEY = os.getenv("BUFFER_API_KEY", "").strip()
+BUFFER_API_KEY = (os.getenv("BUFFER_API_KEY") or os.getenv("BUFFER-API-KEY") or "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_CHAT_IDS = [x.strip() for x in os.getenv("TELEGRAM_CHAT_IDS", TELEGRAM_CHAT_ID).split(",") if x.strip()]
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "serchbestpriceforbtc_bot").strip().lstrip("@")
