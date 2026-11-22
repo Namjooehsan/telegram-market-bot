@@ -514,7 +514,8 @@ def deliver_approved_draft(draft_id, body):
         result["failed"].append("Buffer: API key is not configured")
     else:
         try:
-            channels = BufferClient(BUFFER_API_KEY).list_channels()
+            buffer_client = BufferClient(BUFFER_API_KEY)
+            channels = buffer_client.list_channels()
             active_channels = [ch for ch in channels if not ch.get("isDisconnected") and not ch.get("isLocked")]
             if not active_channels:
                 result["failed"].append("Buffer: no connected, usable channels were found")
@@ -530,7 +531,7 @@ def deliver_approved_draft(draft_id, body):
                     result["failed"].append("Buffer " + channel_name + ": " + error)
                     continue
                 try:
-                    post = BufferClient(BUFFER_API_KEY).create_post(channel_id, body)
+                    post = buffer_client.create_post(channel_id, body)
                     record_draft_delivery(draft_id, key, "buffer", channel_name, "sent", post.get("id"))
                     result["buffer_sent"] += 1
                 except Exception as exc:
@@ -2284,6 +2285,26 @@ def telegram_webhook():
                 "chat_id": chat_id,
                 "text": "هشدار جهش حجم (نه اثبات فعالیت نهنگ):\n" + body
             })
+        elif command == "/bufferstatus" and admin:
+            if not BUFFER_API_KEY:
+                body = "کلید Buffer در Railway تنظیم نشده است."
+            else:
+                try:
+                    channels = BufferClient(BUFFER_API_KEY).list_channels()
+                    body = "کانال‌های Buffer متصل: " + str(len(channels)) + "\n" + "\n".join(
+                        "- " + str(ch.get("displayName") or ch.get("name") or ch["id"]) +
+                        " | " + str(ch.get("service") or "نامشخص") + " | " +
+                        ("قطع اتصال" if ch.get("isDisconnected") else
+                         "قفل‌شده" if ch.get("isLocked") else
+                         "صف متوقف" if ch.get("isQueuePaused") else "آماده صف")
+                        for ch in channels
+                    )
+                    if not channels:
+                        body += "\nهیچ کانالی به سازمان Buffer متصل نیست."
+                except Exception as exc:
+                    log.exception("Buffer status check failed")
+                    body = "اتصال Buffer ناموفق بود: " + str(exc)[:300]
+            telegram_call("sendMessage", {"chat_id": chat_id, "text": body[:3900]})
         elif command == "/status" and admin:
             schedule = "فعال" if scheduler and scheduler.running else "غیرفعال"
             telegram_call("sendMessage", {
