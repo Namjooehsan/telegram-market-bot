@@ -1470,13 +1470,23 @@ def configure_telegram_webhook():
     global WEBHOOK_CONFIGURED
     if WEBHOOK_CONFIGURED:
         return
-    public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
-    if not (TELEGRAM_TOKEN and TELEGRAM_WEBHOOK_SECRET and public_domain):
-        log.warning("Telegram webhook not configured: token, secret, or public domain missing")
+    webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
+    public_domain = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if not webhook_url and public_domain:
+        webhook_url = f"https://{public_domain}/telegram/webhook"
+    if not (TELEGRAM_TOKEN and TELEGRAM_WEBHOOK_SECRET and webhook_url):
+        missing = [
+            name for name, value in (
+                ("TELEGRAM_BOT_TOKEN", TELEGRAM_TOKEN),
+                ("TELEGRAM_WEBHOOK_SECRET", TELEGRAM_WEBHOOK_SECRET),
+                ("TELEGRAM_WEBHOOK_URL or RAILWAY_PUBLIC_DOMAIN", webhook_url),
+            ) if not value
+        ]
+        log.warning("Telegram webhook not configured; missing: %s", ", ".join(missing))
         return
     try:
         telegram_call("setWebhook", {
-            "url": f"https://{public_domain}/telegram/webhook",
+            "url": webhook_url,
             "secret_token": TELEGRAM_WEBHOOK_SECRET,
             "allowed_updates": ["message", "callback_query", "pre_checkout_query"],
             "drop_pending_updates": False
