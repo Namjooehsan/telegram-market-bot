@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import requests
-from opportunity_research import OpportunityResearcher, get_market_universe, format_market_universe, format_opportunity_digest
+from opportunity_research import OpportunityResearcher, get_market_universe, format_market_universe, format_opportunity_digest, format_market_changes
 from buffer_integration import BufferClient
 from advertising import AdvertisingCenter, LANGUAGES, PLATFORMS
 from miniapps.core import FREE_APPS, PAID_PRODUCTS, FREE_CATEGORIES, verify_init_data, paid_products_with_prices, build_paid_prompt
@@ -1079,24 +1079,31 @@ def generate_opportunity_ideas(signals):
 
 
 def scheduled_opportunity_refresh():
-    """Collect public signals daily and privately notify admins about genuinely new records."""
+    """Collect daily public-market signals, compare with yesterday, and notify admins privately."""
     try:
         result = OPPORTUNITY_RESEARCHER.refresh()
-        log.info(
-            "Opportunity research finished: fetched=%s new=%s errors=%s",
-            result.get("fetched", 0), result.get("new_count", 0), len(result.get("errors", []))
-        )
-        if result.get("new_count", 0) <= 0:
-            return
         signals = result.get("signals", [])[:6]
-        ai_ideas = generate_opportunity_ideas(signals)
+        market_changes = result.get("market_changes", [])
+        log.info(
+            "Opportunity research finished: fetched=%s new=%s markets=%s errors=%s",
+            result.get("fetched", 0), result.get("new_count", 0),
+            len(market_changes), len(result.get("errors", []))
+        )
+        ai_ideas = generate_opportunity_ideas(signals) if result.get("new_count", 0) > 0 else None
         message = (
-            "گزارش خودکار فرصت‌های درآمدی تازه\n"
-            f"خبر/سیگنال بررسی‌شده: {result.get('fetched', 0)} | مورد جدید ذخیره‌شده: {result.get('new_count', 0)}\n\n"
-            + format_opportunity_digest(signals[:5])
+            "گزارش روزانه کشف بازار و فرصت درآمدی\n"
+            f"خبر/سیگنال بررسی‌شده: {result.get('fetched', 0)} | مورد تازه ذخیره‌شده: {result.get('new_count', 0)}\n"
+            f"خطاهای منابع: {len(result.get('errors', []))}\n\n"
+            + format_market_changes(market_changes, 8)
+            + "\n\n"
+            + (format_opportunity_digest(signals[:5]) if signals else
+               "امروز سیگنال تازه و قابل استنادی از منابع در دسترس به دست نیامد؛ جستجو در نوبت بعد تکرار می‌شود.")
         )
         if ai_ideas:
-            message += "\n\nایده‌های اجرایی تولیدشده با هوش مصنوعی (نیازمند اعتبارسنجی):\n" + ai_ideas
+            message += "\n\nایده‌های اجرایی هوش مصنوعی (صرفاً فرضیه، نیازمند اعتبارسنجی):\n" + ai_ideas
+        if not ADMIN_IDS:
+            log.warning("Daily opportunity digest not delivered: TELEGRAM_ADMIN_IDS is not configured")
+            return
         for admin_id in ADMIN_IDS:
             try:
                 telegram_call("sendMessage", {
@@ -1104,7 +1111,7 @@ def scheduled_opportunity_refresh():
                     "disable_web_page_preview": True
                 })
             except Exception:
-                log.exception("Could not send opportunity digest to an admin")
+                log.exception("Could not send daily opportunity digest to an admin")
     except Exception:
         log.exception("Scheduled opportunity research failed")
 
@@ -1791,6 +1798,16 @@ def market_universe_api():
 @app.get("/api/opportunities")
 def opportunities_api():
     return jsonify({"signals": OPPORTUNITY_RESEARCHER.latest_signals(20)})
+
+
+@app.get("/api/market-trends")
+def market_trends_api():
+    """Read-only day-over-day opportunity signal counts by market."""
+    return jsonify({
+        "markets": OPPORTUNITY_RESEARCHER.latest_market_changes(12),
+        "as_of": datetime.now(timezone.utc).isoformat(),
+        "note": "Counts are public news/forum signals, not search volume or confirmed buyer demand.",
+    })
 
 
 @app.post("/telegram/webhook")
