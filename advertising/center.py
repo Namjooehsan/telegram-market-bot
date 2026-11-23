@@ -275,8 +275,10 @@ class AdvertisingCenter:
         local_now = now.astimezone(TEHRAN)
         local_start = datetime.combine(local_now.date(), time.min, tzinfo=TEHRAN)
         local_end = local_start + timedelta(days=1)
+        previous_start = local_start - timedelta(days=1)
         start_utc = local_start.astimezone(timezone.utc).isoformat()
         end_utc = local_end.astimezone(timezone.utc).isoformat()
+        previous_start_utc = previous_start.astimezone(timezone.utc).isoformat()
         with self.connect() as conn:
             self.ensure_schema(conn)
             stars = conn.execute("""
@@ -285,6 +287,12 @@ class AdvertisingCenter:
                 WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?
                 GROUP BY product_code ORDER BY product_code
             """, (start_utc, end_utc)).fetchall()
+            previous_stars = conn.execute("""
+                SELECT product_code, COUNT(*) AS order_count, SUM(stars_amount) AS stars_total
+                FROM stars_orders
+                WHERE status = 'paid' AND paid_at >= ? AND paid_at < ?
+                GROUP BY product_code ORDER BY product_code
+            """, (previous_start_utc, start_utc)).fetchall()
             attributed = conn.execute("""
                 SELECT a.campaign_id, COUNT(*) AS order_count, SUM(o.stars_amount) AS stars_total
                 FROM stars_orders o JOIN ad_order_attribution a ON a.payload = o.payload
@@ -297,12 +305,24 @@ class AdvertisingCenter:
                 WHERE status = 'approved' AND reviewed_at >= ? AND reviewed_at < ?
                 GROUP BY asset ORDER BY asset
             """, (start_utc, end_utc)).fetchall()
+            previous_donations = conn.execute("""
+                SELECT asset, COUNT(*) AS item_count, SUM(CAST(amount AS REAL)) AS amount_total
+                FROM donation_requests
+                WHERE status = 'approved' AND reviewed_at >= ? AND reviewed_at < ?
+                GROUP BY asset ORDER BY asset
+            """, (previous_start_utc, start_utc)).fetchall()
             external = conn.execute("""
                 SELECT asset, COUNT(*) AS item_count, SUM(CAST(amount AS REAL)) AS amount_total
                 FROM payment_requests
                 WHERE status = 'approved' AND reviewed_at >= ? AND reviewed_at < ?
                 GROUP BY asset ORDER BY asset
             """, (start_utc, end_utc)).fetchall()
+            previous_external = conn.execute("""
+                SELECT asset, COUNT(*) AS item_count, SUM(CAST(amount AS REAL)) AS amount_total
+                FROM payment_requests
+                WHERE status = 'approved' AND reviewed_at >= ? AND reviewed_at < ?
+                GROUP BY asset ORDER BY asset
+            """, (previous_start_utc, start_utc)).fetchall()
             submitted = conn.execute("""
                 SELECT COUNT(*) FROM donation_requests
                 WHERE status = 'submitted' AND created_at >= ? AND created_at < ?
@@ -315,10 +335,14 @@ class AdvertisingCenter:
             """, (start_utc, end_utc)).fetchall()
         return {
             "date": local_now.date().isoformat(),
+            "previous_date": previous_start.date().isoformat(),
             "stars": [dict(x) for x in stars],
+            "previous_stars": [dict(x) for x in previous_stars],
             "attributed_stars": [dict(x) for x in attributed],
             "approved_donations": [dict(x) for x in donations],
+            "previous_approved_donations": [dict(x) for x in previous_donations],
             "approved_external": [dict(x) for x in external],
+            "previous_approved_external": [dict(x) for x in previous_external],
             "campaign_starts": [dict(x) for x in campaign_starts],
             "unverified_submissions": int(submitted),
         }
@@ -356,8 +380,34 @@ class AdvertisingCenter:
                 lines.append(f"- {row['asset']}: {row['item_count']} مورد، {row['amount_total'] or 0:g}")
         else:
             lines.append("- مورد تأییدشده‌ای ثبت نشده است.")
+
+        def compare(label, current_rows, previous_rows, key_field, count_field, amount_field, unit):
+            current = {str(row[key_field]): row for row in current_rows}
+            previous = {str(row[key_field]): row for row in previous_rows}
+            keys = sorted(set(current) | set(previous))
+            lines.append(label)
+            if not keys:
+                lines.append("- امروز و روز قبل رکورد تأییدشده‌ای ثبت نشده است.")
+                return
+            for key in keys:
+                today_row = current.get(key, {})
+                prior_row = previous.get(key, {})
+                today_count = int(today_row.get(count_field, 0) or 0)
+                prior_count = int(prior_row.get(count_field, 0) or 0)
+                today_amount = float(today_row.get(amount_field, 0) or 0)
+                prior_amount = float(prior_row.get(amount_field, 0) or 0)
+                lines.append(
+                    f"- {key}: امروز {today_count} / روز قبل {prior_count} مورد "
+                    f"(تغییر {today_count-prior_count:+d})؛ "
+                    f"مبلغ امروز {today_amount:g} {unit} / روز قبل {prior_amount:g} {unit}"
+                )
+
+        lines.append(f"مقایسه با روز قبل ({report['previous_date']})، بدون تبدیل و جمع‌زدن ارزهای متفاوت:")
+        compare("Stars:", report["stars"], report["previous_stars"], "product_code", "order_count", "stars_total", "Stars")
+        compare("حمایت رمزارزی:", report["approved_donations"], report["previous_approved_donations"], "asset", "item_count", "amount_total", "واحد دارایی")
+        compare("پرداخت خدمات:", report["approved_external"], report["previous_approved_external"], "asset", "item_count", "amount_total", "واحد دارایی")
         lines.append(f"رسیدهای رمزارزی بررسی‌نشده: {report['unverified_submissions']} (در درآمد منظور نشده)")
-        lines.append("توجه: Stars معادل وجه نقد قابل‌برداشت نیست؛ تبدیل و تسویه به شرایط رسمی تلگرام وابسته است. این گزارش ناخالص است و هزینه تبلیغات/کارمزد/مالیات را کسر نمی‌کند.")
+        lines.append("Stars معادل وجه نقد قابل‌برداشت نیست؛ تسویه تابع شرایط رسمی تلگرام است. مبالغ دارایی‌های مختلف با هم جمع نشده‌اند. گزارش ناخالص است و هزینه تبلیغات، کارمزد و مالیات را کسر نمی‌کند.")
         return "\n".join(lines)
 
     @staticmethod
