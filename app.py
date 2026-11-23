@@ -154,6 +154,25 @@ def market_snapshot(symbol="BTCUSDT"):
 
 
 
+def dynamic_watchlist_summary():
+    """Return a concise summary of the symbols added/removed in the latest daily refresh."""
+    try:
+        response = requests.get(f"{WHALE_TRACKER_API_URL}/api/watchlist", timeout=4)
+        response.raise_for_status()
+        payload = response.json()
+        added = payload.get("added_symbols", []) if isinstance(payload, dict) else []
+        removed = payload.get("removed_symbols", []) if isinstance(payload, dict) else []
+        parts = []
+        if added:
+            parts.append("نمادهای تازه افزوده‌شده به پایش: " + ", ".join(str(x) for x in added[:12]))
+        if removed:
+            parts.append("نمادهای خارج‌شده از فهرست پویا: " + ", ".join(str(x) for x in removed[:12]))
+        return "\n".join(parts) if parts else "در آخرین نوبت، تغییری در فهرست نمادهای پویا ثبت نشده است."
+    except Exception as exc:
+        log.warning("Could not read watchlist change summary: %s", str(exc)[:180])
+        return "گزارش تغییرات فهرست پویا فعلاً در دسترس نیست."
+
+
 def active_tracked_symbols(limit=None):
     """Merge the configured core symbols with the tracker’s validated dynamic watchlist."""
     symbols = list(TRACKED_SYMBOLS)
@@ -1095,6 +1114,8 @@ def scheduled_opportunity_refresh():
             f"خبر/سیگنال بررسی‌شده: {result.get('fetched', 0)} | مورد تازه ذخیره‌شده: {result.get('new_count', 0)}\n"
             f"خطاهای منابع: {len(result.get('errors', []))}\n\n"
             + format_market_changes(market_changes, 8)
+            + "\n\n"
+            + dynamic_watchlist_summary()
             + "\n\n"
             + (format_opportunity_digest(signals[:5]) if signals else
                "امروز سیگنال تازه و قابل استنادی از منابع در دسترس به دست نیامد؛ جستجو در نوبت بعد تکرار می‌شود.")
