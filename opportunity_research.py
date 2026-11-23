@@ -405,10 +405,44 @@ class OpportunityResearcher:
         with self._connect() as conn:
             row = conn.execute("SELECT MAX(snapshot_date) AS d FROM market_daily_snapshots").fetchone()
             latest = row["d"] if row else None
-        if not latest:
-            return []
-        rows = self.save_daily_market_snapshot([], snapshot_date=latest)
-        return rows[:limit]
+            if not latest:
+                return []
+            previous_day = (datetime.fromisoformat(latest).date() - timedelta(days=1)).isoformat()
+            current_rows = conn.execute(
+                """SELECT market_id, market_name, signal_count, avg_score, max_score
+                   FROM market_daily_snapshots WHERE snapshot_date = ?""",
+                (latest,),
+            ).fetchall()
+            previous_rows = conn.execute(
+                """SELECT market_id, signal_count, avg_score
+                   FROM market_daily_snapshots WHERE snapshot_date = ?""",
+                (previous_day,),
+            ).fetchall()
+        previous = {item["market_id"]: dict(item) for item in previous_rows}
+        changes = []
+        for item in current_rows:
+            row = dict(item)
+            prior = previous.get(row["market_id"], {})
+            before = int(prior.get("signal_count", 0) or 0)
+            if row["signal_count"] or before:
+                changes.append({
+                    **row,
+                    "previous_signal_count": before,
+                    "delta_signal_count": row["signal_count"] - before,
+                    "previous_avg_score": round(float(prior.get("avg_score", 0) or 0), 3),
+                    "snapshot_date": latest,
+                    "comparison_date": previous_day,
+                })
+        changes.sort(
+            key=lambda item: (
+                item["delta_signal_count"] > 0,
+                abs(item["delta_signal_count"]),
+                item["signal_count"],
+                item["avg_score"],
+            ),
+            reverse=True,
+        )
+        return changes[:limit]
 
     def refresh(self):
         jobs = [("Google News", q, self._fetch_google_news) for q in SEARCH_QUERIES]
