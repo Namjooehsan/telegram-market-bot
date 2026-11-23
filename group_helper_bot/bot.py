@@ -29,7 +29,10 @@ BOT_ID = None
 
 def telegram(method, payload=None, params=None):
     response = HTTP.post(f"{API}/{method}", json=payload or {}, params=params, timeout=35)
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except requests.RequestException:
+        raise RuntimeError(f"Telegram API {method} failed (HTTP {response.status_code})") from None
     data = response.json()
     if not data.get("ok"):
         raise RuntimeError(f"Telegram API {method} returned ok=false")
@@ -284,6 +287,10 @@ def main():
         raise RuntimeError("HELP_TELEGRAM_BOT_TOKEN is required")
     me = telegram("getMe")
     BOT_ID = me.get("id")
+    webhook = telegram("getWebhookInfo") or {}
+    if webhook.get("url"):
+        log.error("NOVA Help polling not started: a Telegram webhook is already configured; remove it intentionally before switching to polling")
+        return
     log.info("NOVA Help started as @%s", me.get("username", "unknown"))
     telegram("setMyCommands", {"commands": [
         {"command": "start", "description": "شروع و نمایش منوی اصلی"},
@@ -318,8 +325,9 @@ def main():
                         handle_message(update.get("message", {}))
                 except Exception:
                     log.exception("Update handling failed; user content omitted from logs")
-        except requests.RequestException:
-            log.exception("Telegram polling transport error; verify network and webhook/polling exclusivity")
+        except requests.RequestException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            log.error("Telegram polling transport error (HTTP %s); verify network and webhook/polling exclusivity", status or "network error")
             time.sleep(7)
         except RuntimeError:
             log.exception("Telegram polling failed; retrying after delay")
