@@ -111,3 +111,5 @@ GitHub Actions وابستگی‌ها و تست‌ها را بررسی می‌ک�
 - The private administrator digest is generated daily even when no new URLs are found; AI-generated business ideas are only requested when the run adds new signals.
 - Read-only endpoint: `GET /api/market-trends`. The existing `GET /api/opportunities` endpoint continues to return ranked opportunity signals.
 - Public announcements and paid-service changes are not automatically published. Existing approval gates remain in place.
+
+- The daily 23:50 Tehran revenue report now compares successful Telegram Stars orders, manager-approved crypto donations, and manager-approved external service payments with the previous local day, keeping each asset denomination separate. Unverified TXIDs and failed/pending checkouts are not counted as realized revenue.
