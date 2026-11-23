@@ -100,3 +100,14 @@ GitHub Actions وابستگی‌ها و تست‌ها را بررسی می‌ک�
 
 متغیرهای قیمت Mini App: MINIAPP_AD_CAMPAIGN_STARS, MINIAPP_BUSINESS_PLAN_STARS, MINIAPP_CONTENT_CALENDAR_STARS, MINIAPP_AUTOMATION_BLUEPRINT_STARS, MINIAPP_MARKET_BRIEF_STARS. برای اتصال مستقیم دامنه می‌توان MINIAPP_PUBLIC_URL را نیز به URL عمومی HTTPS تنظیم کرد.
 
+
+
+## Dynamic asset selection and daily market comparisons
+
+- The bot, NOVA price board, paid market brief, and volume checks read the live watchlist from the separate read-only tracker endpoint `/api/watchlist`. If the tracker is temporarily unavailable, the configured core symbols remain in use.
+- The tracker refreshes liquid Binance Spot USDT pairs daily and retains a small core list. Only valid Spot symbols are accepted; no orders or automatic portfolio changes are performed.
+- Daily opportunity research now covers AI agents and integration, AI video/UGC, AI data-center infrastructure and semiconductors, stablecoin payment rails, tokenized real-world assets, decentralized AI compute, post-quantum security, robotics, battery/grid infrastructure, critical minerals, ecommerce, and the existing business-service markets.
+- Each daily research run stores a per-market snapshot in SQLite and compares the count and mean score of public news/forum signals with the previous Tehran calendar day. These are counts of collected public signals, not search-volume measurements or proof of customer demand.
+- The private administrator digest is generated daily even when no new URLs are found; AI-generated business ideas are only requested when the run adds new signals.
+- Read-only endpoint: `GET /api/market-trends`. The existing `GET /api/opportunities` endpoint continues to return ranked opportunity signals.
+- Public announcements and paid-service changes are not automatically published. Existing approval gates remain in place.
