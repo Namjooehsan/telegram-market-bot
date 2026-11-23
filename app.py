@@ -5,6 +5,7 @@ import json
 import random
 import sqlite3
 import uuid
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -2494,6 +2495,29 @@ def telegram_callback():
 # Railway runs a single Gunicorn worker for this service; enable jobs explicitly in production.
 scheduler = start_scheduler()
 configure_telegram_webhook()
+
+
+def start_group_helper_worker():
+    token = os.getenv("HELP_TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        log.info("NOVA Help group worker not started: HELP_TELEGRAM_BOT_TOKEN is missing")
+        return None
+    try:
+        from group_helper_bot.bot import main as group_helper_main
+        worker = threading.Thread(
+            target=group_helper_main,
+            name="nova-help-group-worker",
+            daemon=True,
+        )
+        worker.start()
+        log.info("NOVA Help group worker launched")
+        return worker
+    except Exception:
+        log.exception("NOVA Help group worker could not be launched")
+        return None
+
+
+group_helper_worker = start_group_helper_worker()
 
 
 if __name__ == "__main__":
