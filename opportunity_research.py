@@ -7,7 +7,8 @@ import math
 import re
 import sqlite3
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -19,19 +20,39 @@ MARKET_FILE = Path(__file__).with_name("market_universe.json")
 
 SEARCH_QUERIES = [
     "AI automation small business demand",
-    "AI video editing freelance services demand",
+    "AI integration AI agents business workflow adoption",
+    "AI video generation editing UGC advertising services demand",
+    "AI data center infrastructure semiconductors networking cooling power demand",
     "ecommerce management retail logistics trends",
     "micro SaaS productivity software startup",
     "creator economy paid memberships digital products",
-    "cybersecurity small business privacy services",
-    "renewable energy home efficiency small business",
+    "cybersecurity small business privacy backup fraud prevention",
+    "post quantum cryptography quantum safe security enterprise adoption",
+    "robotics industrial automation warehouse humanoid robotics investment",
+    "renewable energy battery storage grid infrastructure data center power",
+    "critical minerals copper lithium rare earths supply chain",
     "food agriculture supply chain technology",
     "crypto payments blockchain institutional adoption regulation",
+    "tokenized real world assets RWA tokenized funds equities adoption",
+    "stablecoin payment rails cross border settlement merchant payments",
+    "decentralized AI compute DePIN GPU inference marketplace",
+    "Bitcoin ecosystem BTCFi layer 2 institutional custody",
     "gold oil forex macroeconomic markets business",
     "real estate property management services",
     "pet services home repair local businesses",
 ]
-HN_QUERIES = ["AI automation", "micro SaaS", "creator economy", "ecommerce"]
+HN_QUERIES = [
+    "AI automation agents",
+    "AI video tools",
+    "micro SaaS",
+    "creator economy",
+    "ecommerce",
+    "stablecoin payments",
+    "tokenized real world assets",
+    "decentralized compute DePIN",
+    "post quantum cryptography",
+    "robotics automation",
+]
 DEMAND_TERMS = (
     "demand", "growth", "adoption", "search", "hiring", "jobs", "business",
     "market", "trend", "launch", "funding", "revenue", "automation",
@@ -137,6 +158,18 @@ class OpportunityResearcher:
                     content TEXT NOT NULL,
                     source_urls_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS market_daily_snapshots (
+                    snapshot_date TEXT NOT NULL,
+                    market_id TEXT NOT NULL,
+                    market_name TEXT NOT NULL,
+                    signal_count INTEGER NOT NULL,
+                    avg_score REAL NOT NULL,
+                    max_score REAL NOT NULL,
+                    captured_at TEXT NOT NULL,
+                    PRIMARY KEY (snapshot_date, market_id)
                 )
             """)
 
@@ -300,13 +333,92 @@ class OpportunityResearcher:
         new_count = self._save(signals) if signals else 0
         return raw, signals, errors, new_count
 
+    def save_daily_market_snapshot(self, signals, snapshot_date=None):
+        """Persist one comparable daily snapshot per market and return day-over-day changes."""
+        today = snapshot_date or datetime.now(ZoneInfo("Asia/Tehran")).date().isoformat()
+        previous_day = (datetime.fromisoformat(today).date() - timedelta(days=1)).isoformat()
+        captured_at = datetime.now(timezone.utc).isoformat()
+        grouped = {}
+        for item in signals or []:
+            market_id = item.get("market_id", "other")
+            grouped.setdefault(market_id, []).append(float(item.get("score") or 0))
+        current = {}
+        with self._connect() as conn:
+            for market in self.markets:
+                market_id = market.get("id", "other")
+                scores = grouped.get(market_id, [])
+                row = {
+                    "market_id": market_id,
+                    "market_name": market.get("name", market_id),
+                    "signal_count": len(scores),
+                    "avg_score": round(sum(scores) / len(scores), 3) if scores else 0.0,
+                    "max_score": round(max(scores), 3) if scores else 0.0,
+                }
+                current[market_id] = row
+                conn.execute("""
+                    INSERT INTO market_daily_snapshots
+                    (snapshot_date, market_id, market_name, signal_count, avg_score, max_score, captured_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(snapshot_date, market_id) DO UPDATE SET
+                      market_name=excluded.market_name,
+                      signal_count=excluded.signal_count,
+                      avg_score=excluded.avg_score,
+                      max_score=excluded.max_score,
+                      captured_at=excluded.captured_at
+                """, (
+                    today, row["market_id"], row["market_name"], row["signal_count"],
+                    row["avg_score"], row["max_score"], captured_at,
+                ))
+            previous_rows = conn.execute(
+                """SELECT market_id, market_name, signal_count, avg_score
+                   FROM market_daily_snapshots WHERE snapshot_date = ?""",
+                (previous_day,),
+            ).fetchall()
+        previous = {row["market_id"]: dict(row) for row in previous_rows}
+        changes = []
+        for market_id, row in current.items():
+            prior = previous.get(market_id, {})
+            prior_count = int(prior.get("signal_count", 0) or 0)
+            delta = row["signal_count"] - prior_count
+            if row["signal_count"] or prior_count:
+                changes.append({
+                    **row,
+                    "previous_signal_count": prior_count,
+                    "delta_signal_count": delta,
+                    "previous_avg_score": round(float(prior.get("avg_score", 0) or 0), 3),
+                    "snapshot_date": today,
+                    "comparison_date": previous_day,
+                })
+        changes.sort(
+            key=lambda item: (
+                item["delta_signal_count"] > 0,
+                abs(item["delta_signal_count"]),
+                item["signal_count"],
+                item["avg_score"],
+            ),
+            reverse=True,
+        )
+        return changes[:12]
+
+    def latest_market_changes(self, limit=12):
+        limit = min(20, max(1, int(limit)))
+        with self._connect() as conn:
+            row = conn.execute("SELECT MAX(snapshot_date) AS d FROM market_daily_snapshots").fetchone()
+            latest = row["d"] if row else None
+        if not latest:
+            return []
+        rows = self.save_daily_market_snapshot([], snapshot_date=latest)
+        return rows[:limit]
+
     def refresh(self):
         jobs = [("Google News", q, self._fetch_google_news) for q in SEARCH_QUERIES]
         jobs += [("Hacker News", q, self._fetch_hacker_news) for q in HN_QUERIES]
         raw, signals, errors, new_count = self._run_queries(jobs)
+        market_changes = self.save_daily_market_snapshot(signals)
         return {
             "fetched": len(raw), "new_count": new_count,
             "errors": errors[:12], "signals": self.latest_signals(12),
+            "market_changes": market_changes,
         }
 
     def search_custom(self, query, limit=6):
@@ -318,6 +430,26 @@ class OpportunityResearcher:
             ("Hacker News", query, self._fetch_hacker_news),
         ])
         return sorted(signals, key=lambda item: (item["score"], item["published_at"]), reverse=True)[:limit]
+
+
+def format_market_changes(changes, limit=8):
+    changes = list(changes or [])[:max(1, min(12, int(limit)))]
+    if not changes:
+        return "برای این نوبت سیگنال قابل‌مقایسه‌ای ثبت نشده است."
+    lines = [
+        "مقایسه روزانه بازارها بر اساس خبرها و سیگنال‌های عمومی",
+        "این اعداد حجم جستجوی کاربران یا تقاضای قطعی خرید نیستند؛ تعداد سیگنال‌های جمع‌آوری‌شده‌اند.",
+        "",
+    ]
+    for item in changes:
+        delta = int(item.get("delta_signal_count", 0) or 0)
+        direction = "افزایش" if delta > 0 else "کاهش" if delta < 0 else "بدون تغییر"
+        lines.append(
+            f"- {item.get('market_name', 'بازار نامشخص')}: امروز {item.get('signal_count', 0)} "
+            f"| روز قبل {item.get('previous_signal_count', 0)} | {direction} {abs(delta)} "
+            f"| امتیاز میانگین {item.get('avg_score', 0)}"
+        )
+    return "\n".join(lines)
 
 
 def format_opportunity_digest(signals, limit=5):
