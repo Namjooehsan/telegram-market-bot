@@ -2517,7 +2517,11 @@ def start_group_helper_worker():
         return None
 
 
-group_helper_worker = start_group_helper_worker()
+group_helper_worker = (
+    start_group_helper_worker()
+    if os.getenv("ENABLE_GROUP_HELPER_WORKER", "false").lower() == "true"
+    else None
+)
 
 
 if __name__ == "__main__":
