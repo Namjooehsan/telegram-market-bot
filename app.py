@@ -153,6 +153,31 @@ def market_snapshot(symbol="BTCUSDT"):
     }
 
 
+
+def active_tracked_symbols(limit=None):
+    """Merge the configured core symbols with the tracker’s validated dynamic watchlist."""
+    symbols = list(TRACKED_SYMBOLS)
+    try:
+        response = requests.get(f"{WHALE_TRACKER_API_URL}/api/watchlist", timeout=4)
+        response.raise_for_status()
+        payload = response.json()
+        remote = payload.get("symbols", []) if isinstance(payload, dict) else []
+        if isinstance(remote, list):
+            valid = []
+            for item in remote:
+                symbol = str(item or "").strip().upper()
+                if re.fullmatch(r"[A-Z0-9]{2,16}USDT", symbol) and symbol not in valid:
+                    valid.append(symbol)
+            if valid:
+                symbols = valid + symbols
+    except Exception as exc:
+        log.warning("Dynamic watchlist unavailable; using configured core symbols: %s", str(exc)[:180])
+    symbols = list(dict.fromkeys(symbols))[:30]
+    if limit is not None:
+        return symbols[:max(1, int(limit))]
+    return symbols
+
+
 def openai_text(prompt, system_prompt, max_output_tokens=650):
     """Call the OpenAI Responses API, disabling repeated calls after auth failures."""
     global OPENAI_AUTH_FAILED, OPENAI_LAST_SUCCESS
@@ -247,7 +272,7 @@ def ai_market_commentary(rows):
 
 def ai_answer(question):
     snapshots = []
-    for symbol in TRACKED_SYMBOLS[:8]:
+    for symbol in active_tracked_symbols(8):
         try:
             snapshots.append(market_snapshot(symbol))
         except Exception as exc:
@@ -271,7 +296,7 @@ def ai_answer(question):
 
 
 def make_report():
-    symbols = TRACKED_SYMBOLS
+    symbols = active_tracked_symbols()
     rows = []
     for symbol in symbols:
         try:
@@ -1584,7 +1609,7 @@ def miniapp_catalog():
 def miniapp_market_data():
     """Public, read-only price ticker for the free market board."""
     items = []
-    for symbol in TRACKED_SYMBOLS[:8]:
+    for symbol in active_tracked_symbols(8):
         if not symbol.endswith("USDT") or len(symbol) > 20:
             continue
         try:
@@ -1689,7 +1714,7 @@ def miniapp_generate():
 
     market_data = []
     if product_code == "miniapp_market_brief":
-        for symbol in TRACKED_SYMBOLS[:5]:
+        for symbol in active_tracked_symbols(5):
             try:
                 market_data.append(market_snapshot(symbol))
             except Exception as exc:
@@ -2282,7 +2307,7 @@ def telegram_webhook():
                 })
         elif command == "/whales":
             signals = []
-            for symbol in TRACKED_SYMBOLS[:8]:
+            for symbol in active_tracked_symbols(8):
                 try:
                     row = market_snapshot(symbol)
                     if row["volume_spike_ratio"] >= 2.0:
@@ -2325,7 +2350,7 @@ def telegram_webhook():
                     f"\nمدل: {OPENAI_MODEL}\nزمان‌بندی تهران: {schedule}"
                     f"\nپرداخت Stars: {'تنظیم شده' if stars_product('premium_30d') else 'منتظر تعیین قیمت'}"
                     f"\nآدرس‌های حمایت: {'ثبت شده' if any([SUPPORT_BTC_ADDRESS, SUPPORT_BCH_ADDRESS, SUPPORT_XRP_ADDRESS, SUPPORT_ADA_ADDRESS]) else 'ثبت نشده'}"
-                    f"\nدارایی‌های تحت پایش: {', '.join(TRACKED_SYMBOLS)}"
+                    f"\nدارایی‌های تحت پایش: {', '.join(active_tracked_symbols())}"
                     f"\nمقصدهای انتشار: {len(TELEGRAM_CHAT_IDS)}"
                 )
             })
