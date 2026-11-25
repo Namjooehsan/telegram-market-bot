@@ -2,6 +2,7 @@ import os
 import hmac
 import logging
 import json
+import re
 import random
 import sqlite3
 import uuid
