@@ -2560,8 +2560,8 @@ def telegram_callback():
 def _miniapp_announcement_expiry():
     """End of the current Tehran calendar week (Saturday 23:59:59)."""
     local_now = datetime.now(ZoneInfo("Asia/Tehran"))
-    days_until_saturday = (5 - local_now.weekday()) % 7
-    expiry = (local_now + timedelta(days=days_until_saturday)).replace(
+    days_until_friday = (4 - local_now.weekday()) % 7
+    expiry = (local_now + timedelta(days=days_until_friday)).replace(
         hour=23, minute=59, second=59, microsecond=0
     )
     if expiry <= local_now:
