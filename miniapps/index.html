@@ -30,6 +30,21 @@ button,input,select,textarea{font:inherit}button{cursor:pointer}.wrap{position:r
 .catalog-view[hidden],.home-view[hidden]{display:none}
 @media(max-width:360px){.branch-grid{grid-template-columns:1fr}}@media(prefers-reduced-motion:reduce){.ticker-track{animation:none;transform:none}body::before{animation:none}}
 @media(min-width:650px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}.overlay{align-items:center}.modal{max-height:84vh}.app-card{min-height:158px;padding:16px}}@media(max-width:360px){.grid{grid-template-columns:1fr}.hero{padding:18px}.row-fields{grid-template-columns:1fr}}
+
+.announcement-strip{display:none;position:relative;z-index:2;margin:0 0 14px;padding:12px 15px;border:1px solid rgba(99,226,221,.35);border-radius:15px;background:linear-gradient(105deg,rgba(60,191,190,.13),rgba(139,124,255,.16));color:#e8f8ff;font-size:12px;line-height:1.9;box-shadow:0 8px 24px rgba(0,0,0,.12);white-space:pre-wrap;overflow-wrap:anywhere}
+.announcement-strip.bottom{margin:18px 0 12px}
+.admin-announcement-btn{border:1px solid rgba(139,124,255,.5);border-radius:12px;padding:8px 11px;background:rgba(139,124,255,.16);color:#eeeaff;font-size:11px;font-weight:800}
+.announcement-dialog{width:min(440px,calc(100% - 24px));border:1px solid rgba(139,124,255,.45);border-radius:20px;background:#141d33;color:#f5f7fb;padding:18px;box-shadow:0 25px 80px #0009}
+.announcement-dialog::backdrop{background:rgba(2,6,18,.76);backdrop-filter:blur(6px)}
+.announcement-dialog h3{margin:0 0 8px;font-size:16px}
+.announcement-dialog p{font-size:11px;line-height:1.8;color:#aab8d3}
+.announcement-dialog textarea{width:100%;min-height:110px;resize:vertical;border:1px solid rgba(166,184,218,.22);border-radius:12px;padding:11px;background:#0b1325;color:#f5f7fb;font:inherit;line-height:1.8}
+.announcement-dialog .dialog-actions{display:flex;gap:8px;margin-top:10px}
+.announcement-dialog .dialog-actions button{flex:1}
+.app-card,.branch-card,.action,.filter{transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}
+.app-card:hover,.branch-card:hover{transform:translateY(-2px);border-color:rgba(139,124,255,.55);box-shadow:0 14px 30px rgba(0,0,0,.2)}
+.action:hover{filter:brightness(1.1);transform:translateY(-1px)}
+@media(prefers-reduced-motion:reduce){.app-card,.branch-card,.action,.filter{transition:none}}
 </style>
 </head>
 <body>
@@ -163,6 +178,82 @@ $("buy").addEventListener("click",async function(){var b=$("buy");b.disabled=tru
 function paidForm(a){var options=Array.from(lang.options).map(function(o){return '<option value="'+o.value+'" '+(o.value===lang.value?"selected":"")+'>'+esc(o.textContent)+'</option>';}).join("");openModal(a.title,'<div class="pro-form"><div class="field"><label>موضوع یا محصول</label><input id="pt" maxlength="1600" placeholder="دقیق توضیح بده چه می‌خواهی"></div><div class="field"><label>مخاطب هدف</label><input id="pa" maxlength="500" placeholder="مثلاً فروشگاه‌های کوچک"></div><div class="field"><label>کشور یا منطقه هدف</label><input id="pr" maxlength="100" placeholder="مثلاً ایران، استانبول، بازار عربی"></div><div class="field"><label>گویش یا زبان محلی منطقه (اختیاری)</label><input id="pd" maxlength="120" placeholder="مثلاً عربی عراقی، ترکی آذربایجانی، دری"></div><div class="field"><label>پیشنهاد یا جزئیات</label><input id="po" maxlength="400" placeholder="ویژگی، قیمت، محدودیت"></div><div class="field"><label>زبان خروجی</label><select id="pl">'+options+'</select></div><div class="field"><label>پلتفرم یا ابزارها</label><input id="pp" maxlength="80" placeholder="Telegram, Instagram, n8n"></div><button class="action" id="gen">تولید خروجی اختصاصی</button></div><div id="out"></div><p class="muted">هر خرید یک خروجی اختصاصی ذخیره‌شده فراهم می‌کند؛ تولید دوباره نیازمند سفارش جدید است.</p>');
 $("gen").addEventListener("click",async function(){var topic=$("pt").value.trim();if(topic.length<5){$("out").innerHTML='<div class="empty">موضوع باید حداقل ۵ نویسه باشد.</div>';return;}var b=$("gen");b.disabled=true;b.textContent="در حال تولید…";try{var data=await api("/api/miniapp/generate",{method:"POST",body:JSON.stringify({product_code:a.code,topic:topic,audience:$("pa").value,region:$("pr").value,dialect:$("pd").value,offer:$("po").value,language:$("pl").value,platform:$("pp").value})});$("out").innerHTML='<div class="result">'+esc(data.content||"")+'</div><button class="action secondary" id="copyOut">کپی خروجی</button>';$("copyOut").addEventListener("click",function(){copyText(data.content||"");});a.has_result=true;a.result=data.content;renderPaid();}catch(e){$("out").innerHTML='<div class="empty">'+esc(e.message)+'</div>';b.disabled=false;b.textContent="تلاش دوباره";}});}
 loadCatalog().then(function(){renderHome();renderFilters();renderFree();renderPaid();});
+})();
+</script>
+
+<script>
+(function(){
+  var tg=window.Telegram&&window.Telegram.WebApp;
+  var initData=tg&&tg.initData?tg.initData:"";
+  var headers={"Accept":"application/json"};
+  if(initData)headers["X-Telegram-Init-Data"]=initData;
+  var wrap=document.querySelector(".wrap");
+  var topbar=document.querySelector(".topbar");
+  var bottom=document.querySelector(".bottom-note");
+  if(!wrap||!topbar)return;
+  function strip(where){
+    var el=document.createElement("div");
+    el.className="announcement-strip"+(where==="bottom"?" bottom":"");
+    el.setAttribute("role","status");
+    el.setAttribute("aria-live","polite");
+    if(where==="top")topbar.insertAdjacentElement("afterend",el);
+    else if(bottom)bottom.insertAdjacentElement("beforebegin",el);
+    else wrap.appendChild(el);
+    return el;
+  }
+  var topStrip=strip("top"),bottomStrip=strip("bottom");
+  function showMessage(message){
+    [topStrip,bottomStrip].forEach(function(el){
+      el.textContent=message||"";
+      el.style.display=message?"block":"none";
+    });
+  }
+  function api(path,options){
+    options=options||{};
+    options.headers=Object.assign({},headers,options.headers||{});
+    if(options.body)options.headers["Content-Type"]="application/json";
+    return fetch(path,options).then(async function(response){
+      var data=await response.json().catch(function(){return{};});
+      if(!response.ok)throw new Error(data.error||"درخواست انجام نشد.");
+      return data;
+    });
+  }
+  function addAdminEditor(initialMessage,expiresAt){
+    var button=document.createElement("button");
+    button.type="button";button.className="admin-announcement-btn";
+    button.textContent="✎ پیام موقت";
+    button.setAttribute("aria-label","مدیریت پیام موقت سایت");
+    topbar.appendChild(button);
+    var dialog=document.createElement("dialog");
+    dialog.className="announcement-dialog";
+    var title=document.createElement("h3");title.textContent="مدیریت پیام موقت";
+    var help=document.createElement("p");
+    help.textContent="متن در بالای صفحه و پایین صفحه نمایش داده می‌شود و در پایان هفته جاری به وقت تهران خودکار حذف خواهد شد. برای حذف فوری، متن را خالی ذخیره کن.";
+    var area=document.createElement("textarea");
+    area.maxLength=500;area.placeholder="پیام دلخواهت را بنویس…";area.value=initialMessage||"";
+    var status=document.createElement("p");status.setAttribute("aria-live","polite");
+    if(expiresAt)status.textContent="انقضای فعلی: "+new Date(expiresAt).toLocaleString("fa-IR");
+    var actions=document.createElement("div");actions.className="dialog-actions";
+    var save=document.createElement("button");save.type="button";save.className="action";save.textContent="ذخیره پیام";
+    var close=document.createElement("button");close.type="button";close.className="action secondary";close.textContent="بستن";
+    actions.append(save,close);dialog.append(title,help,area,status,actions);document.body.appendChild(dialog);
+    button.addEventListener("click",function(){if(typeof dialog.showModal==="function")dialog.showModal();else{area.focus();}});
+    close.addEventListener("click",function(){dialog.close();});
+    save.addEventListener("click",async function(){
+      save.disabled=true;save.textContent="در حال ذخیره…";
+      try{
+        var result=await api("/api/miniapp/announcement",{method:"POST",body:JSON.stringify({message:area.value})});
+        showMessage(result.message||"");
+        status.textContent=result.expires_at?"ذخیره شد؛ پایان نمایش: "+new Date(result.expires_at).toLocaleString("fa-IR"):"پیام حذف شد.";
+        if(!result.message)area.value="";
+      }catch(error){status.textContent=error.message;}
+      finally{save.disabled=false;save.textContent="ذخیره پیام";}
+    });
+  }
+  api("/api/miniapp/announcement").then(function(data){
+    showMessage(data.message||"");
+    if(data.is_admin)addAdminEditor(data.message,data.expires_at);
+  }).catch(function(){showMessage("");});
 })();
 </script>
 </body>
