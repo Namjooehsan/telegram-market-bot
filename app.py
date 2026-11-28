@@ -2555,6 +2555,84 @@ def telegram_callback():
     return jsonify({"ok": True})
 
 
+
+
+def _miniapp_announcement_expiry():
+    """End of the current Tehran calendar week (Friday 23:59:59)."""
+    local_now = datetime.now(ZoneInfo("Asia/Tehran"))
+    days_until_friday = (4 - local_now.weekday()) % 7
+    expiry = (local_now + timedelta(days=days_until_friday)).replace(
+        hour=23, minute=59, second=59, microsecond=0
+    )
+    if expiry <= local_now:
+        expiry += timedelta(days=7)
+    return expiry
+
+
+def _ensure_miniapp_announcements(connection):
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS miniapp_announcements (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            message TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            updated_by TEXT NOT NULL
+        )
+    """)
+
+
+@app.get("/api/miniapp/announcement")
+@limiter.limit("60 per minute")
+def miniapp_announcement_get():
+    user = verified_miniapp_user()
+    now = datetime.now(ZoneInfo("Asia/Tehran"))
+    with draft_db() as connection:
+        _ensure_miniapp_announcements(connection)
+        row = connection.execute(
+            "SELECT message, expires_at FROM miniapp_announcements WHERE id = 1"
+        ).fetchone()
+        if row and datetime.fromisoformat(row["expires_at"]) <= now:
+            connection.execute("DELETE FROM miniapp_announcements WHERE id = 1")
+            row = None
+    return jsonify({
+        "message": row["message"] if row else "",
+        "expires_at": row["expires_at"] if row else None,
+        "is_admin": bool(user and str(user.get("id")) in ADMIN_IDS),
+    })
+
+
+@app.post("/api/miniapp/announcement")
+@limiter.limit("10 per minute")
+def miniapp_announcement_save():
+    user = verified_miniapp_user()
+    if not user or str(user.get("id")) not in ADMIN_IDS:
+        return jsonify({"error": "دسترسی مدیر تأیید نشد."}), 403
+    payload = request.get_json(silent=True) or {}
+    message = payload.get("message", "")
+    if not isinstance(message, str):
+        return jsonify({"error": "متن پیام معتبر نیست."}), 400
+    message = message.strip()
+    if len(message) > 500:
+        return jsonify({"error": "حداکثر طول پیام ۵۰۰ نویسه است."}), 400
+    with draft_db() as connection:
+        _ensure_miniapp_announcements(connection)
+        if not message:
+            connection.execute("DELETE FROM miniapp_announcements WHERE id = 1")
+            return jsonify({"ok": True, "message": "", "expires_at": None})
+        expiry = _miniapp_announcement_expiry()
+        updated = datetime.now(ZoneInfo("Asia/Tehran")).isoformat()
+        connection.execute("""
+            INSERT INTO miniapp_announcements (id, message, expires_at, updated_at, updated_by)
+            VALUES (1, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                message = excluded.message,
+                expires_at = excluded.expires_at,
+                updated_at = excluded.updated_at,
+                updated_by = excluded.updated_by
+        """, (message, expiry.isoformat(), updated, str(user.get("id"))))
+    return jsonify({"ok": True, "message": message, "expires_at": expiry.isoformat()})
+
+
 # Railway runs a single Gunicorn worker for this service; enable jobs explicitly in production.
 scheduler = start_scheduler()
 configure_telegram_webhook()

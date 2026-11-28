@@ -273,3 +273,57 @@ def test_miniapp_generation_requires_purchase(tmp_path, monkeypatch):
         json={"product_code": "miniapp_business_plan", "topic": "A local delivery app"},
     )
     assert response.status_code == 403
+
+
+
+def test_announcement_editor_requires_verified_admin(tmp_path, monkeypatch):
+    token = "test-bot-token"
+    monkeypatch.setattr(market_app, "TELEGRAM_TOKEN", token)
+    monkeypatch.setattr(market_app, "ADMIN_IDS", {"12345"})
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "announcements.sqlite3"))
+    client = market_app.app.test_client()
+    assert client.post("/api/miniapp/announcement", json={"message": "سلام"}).status_code == 403
+    non_admin = {"X-Telegram-Init-Data": signed_init_data(token, user_id=54321)}
+    assert client.post(
+        "/api/miniapp/announcement", headers=non_admin, json={"message": "سلام"}
+    ).status_code == 403
+
+
+def test_admin_announcement_is_persisted_and_expires_friday_tehran(tmp_path, monkeypatch):
+    token = "test-bot-token"
+    monkeypatch.setattr(market_app, "TELEGRAM_TOKEN", token)
+    monkeypatch.setattr(market_app, "ADMIN_IDS", {"12345"})
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "announcements.sqlite3"))
+    client = market_app.app.test_client()
+    headers = {"X-Telegram-Init-Data": signed_init_data(token, user_id=12345)}
+    saved = client.post(
+        "/api/miniapp/announcement", headers=headers, json={"message": "اطلاعیه آزمایشی"}
+    )
+    assert saved.status_code == 200
+    assert saved.json["message"] == "اطلاعیه آزمایشی"
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    expiry = datetime.fromisoformat(saved.json["expires_at"]).astimezone(ZoneInfo("Asia/Tehran"))
+    assert expiry.weekday() == 4
+    assert (expiry.hour, expiry.minute, expiry.second) == (23, 59, 59)
+    public = client.get("/api/miniapp/announcement")
+    assert public.status_code == 200
+    assert public.json["message"] == "اطلاعیه آزمایشی"
+    assert public.json["is_admin"] is False
+
+
+def test_admin_can_clear_announcement_and_long_messages_are_rejected(tmp_path, monkeypatch):
+    token = "test-bot-token"
+    monkeypatch.setattr(market_app, "TELEGRAM_TOKEN", token)
+    monkeypatch.setattr(market_app, "ADMIN_IDS", {"12345"})
+    monkeypatch.setattr(market_app, "DRAFT_DB_PATH", str(tmp_path / "announcements.sqlite3"))
+    client = market_app.app.test_client()
+    headers = {"X-Telegram-Init-Data": signed_init_data(token, user_id=12345)}
+    too_long = client.post(
+        "/api/miniapp/announcement", headers=headers, json={"message": "x" * 501}
+    )
+    assert too_long.status_code == 400
+    client.post("/api/miniapp/announcement", headers=headers, json={"message": "متن"})
+    cleared = client.post("/api/miniapp/announcement", headers=headers, json={"message": ""})
+    assert cleared.status_code == 200
+    assert client.get("/api/miniapp/announcement").json["message"] == ""
