@@ -19,3 +19,11 @@ def test_miniapp_dashboard_keeps_products_out_of_home_page():
     catalog_start = html.index('<div class="catalog-view" id="catalogView"')
     assert home_start < catalog_start
     assert 'id="paidGrid"' in html[catalog_start:]
+
+
+
+def test_announcement_banners_hide_at_the_server_supplied_expiry():
+    html = (Path(__file__).resolve().parents[1] / "miniapps" / "index.html").read_text(encoding="utf-8")
+    assert "var expiryTimer=null" in html
+    assert "Date.parse(expiresAt)-Date.now()" in html
+    assert 'showMessage(data.message||"",data.expires_at)' in html

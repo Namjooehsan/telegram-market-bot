@@ -202,11 +202,18 @@ loadCatalog().then(function(){renderHome();renderFilters();renderFree();renderPa
     return el;
   }
   var topStrip=strip("top"),bottomStrip=strip("bottom");
-  function showMessage(message){
+  var expiryTimer=null;
+  function showMessage(message,expiresAt){
+    if(expiryTimer){clearTimeout(expiryTimer);expiryTimer=null;}
     [topStrip,bottomStrip].forEach(function(el){
       el.textContent=message||"";
       el.style.display=message?"block":"none";
     });
+    if(message&&expiresAt){
+      var remaining=Date.parse(expiresAt)-Date.now();
+      if(remaining>0)expiryTimer=setTimeout(function(){showMessage("");},remaining);
+      else showMessage("");
+    }
   }
   function api(path,options){
     options=options||{};
@@ -243,7 +250,7 @@ loadCatalog().then(function(){renderHome();renderFilters();renderFree();renderPa
       save.disabled=true;save.textContent="در حال ذخیره…";
       try{
         var result=await api("/api/miniapp/announcement",{method:"POST",body:JSON.stringify({message:area.value})});
-        showMessage(result.message||"");
+        showMessage(result.message||"",result.expires_at);
         status.textContent=result.expires_at?"ذخیره شد؛ پایان نمایش: "+new Date(result.expires_at).toLocaleString("fa-IR"):"پیام حذف شد.";
         if(!result.message)area.value="";
       }catch(error){status.textContent=error.message;}
@@ -251,7 +258,7 @@ loadCatalog().then(function(){renderHome();renderFilters();renderFree();renderPa
     });
   }
   api("/api/miniapp/announcement").then(function(data){
-    showMessage(data.message||"");
+    showMessage(data.message||"",data.expires_at);
     if(data.is_admin)addAdminEditor(data.message,data.expires_at);
   }).catch(function(){showMessage("");});
 })();
